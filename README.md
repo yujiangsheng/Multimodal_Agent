@@ -1,4 +1,4 @@
-# 🎭 Pinocchio — 多模态自进化智能体
+# 🎭 Pinocchio — 多模态自我进化智能体
 
 [![Author](https://img.shields.io/badge/Author-Jansen%20Yu-blue)](https://github.com/yujansen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -9,45 +9,17 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 
 ---
 
-## 📐 系统架构
+## ✨ 核心特性
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Pinocchio Orchestrator                        │
-│            (全局协调 · 认知循环驱动 · 会话管理)                    │
-├────────┬────────┬──────────┬────────────┬─────────┬─────────────┤
-│Percep- │Strate- │Execution │Evaluation  │Learning │Meta-Reflec- │
-│tion    │gy      │Agent     │Agent       │Agent    │tion Agent   │
-│Agent   │Agent   │          │            │         │             │
-│ 感知   │ 策略    │  执行     │   评估      │  学习   │   元反思     │
-├────────┴────────┴──────────┴────────────┴─────────┴─────────────┤
-│                  Multimodal Processor Pool                       │
-│   ┌──────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐       │
-│   │   Text   │ │  Vision   │ │   Audio   │ │   Video   │       │
-│   │Processor │ │ Processor │ │ Processor │ │ Processor │       │
-│   └──────────┘ └───────────┘ └───────────┘ └───────────┘       │
-├─────────────────────────────────────────────────────────────────┤
-│                    Memory Manager                                │
-│   ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐       │
-│   │   Episodic   │ │   Semantic   │ │    Procedural    │       │
-│   │   Memory     │ │   Memory     │ │    Memory        │       │
-│   │   经验记忆    │ │   知识记忆    │ │    程序记忆       │       │
-│   └──────────────┘ └──────────────┘ └──────────────────┘       │
-├─────────────────────────────────────────────────────────────────┤
-│             LLM Client  ·  Logger  ·  Config                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 认知循环流程
-
-```
-用户输入 ──→ PERCEIVE ──→ STRATEGIZE ──→ EXECUTE ──→ EVALUATE ──→ LEARN ──→ 用户输出
-              感知           策略           执行        评估         学习
-                                                                    │
-                                                          (每 5 次) ↓
-                                                              META-REFLECT
-                                                                元反思
-```
+| 特性 | 说明 |
+|------|------|
+| **6 阶段认知循环** | PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT |
+| **多模态原生** | 文本 / 图像 / 音频 / 视频，通过 Qwen2.5-Omni 统一处理 |
+| **三层记忆系统** | 情景记忆 + 语义记忆 + 程序记忆，JSON 文件持久化，倒排索引加速 |
+| **自我进化** | 从每次交互中提取教训，优化策略，积累可复用的程序模板 |
+| **元反思** | 周期性高阶反思，检测认知偏差，生成改进计划 |
+| **硬件感知并行** | 自动检测 CPU / GPU / RAM，动态调整并行度 |
+| **异步支持** | `AsyncLLMClient` + `async_chat()` 适用于高吞吐场景 |
 
 ---
 
@@ -55,322 +27,95 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 
 ```
 Multimodal_Agent/
-├── main.py                          # CLI 入口
-├── config.py                        # 全局配置
-├── requirements.txt                 # 依赖
-├── pinocchio_system_prompt.md       # 系统提示词设计文档
-├── README.md                        # 本文件
-├── data/                            # 持久化记忆存储 (自动创建)
-│   ├── episodic_memory.json
-│   ├── semantic_memory.json
-│   └── procedural_memory.json
-└── pinocchio/
-    ├── __init__.py
-    ├── orchestrator.py              # 🎭 Pinocchio 主编排器
-    ├── agents/
-    │   ├── __init__.py
-    │   ├── base_agent.py            # 🧬 基础智能体抽象类
-    │   ├── perception_agent.py      # 👁 感知智能体
-    │   ├── strategy_agent.py        # 🧠 策略智能体
-    │   ├── execution_agent.py       # ⚡ 执行智能体
-    │   ├── evaluation_agent.py      # 📊 评估智能体
-    │   ├── learning_agent.py        # 📚 学习智能体
-    │   └── meta_reflection_agent.py # 🔮 元反思智能体
-    ├── multimodal/
-    │   ├── __init__.py
-    │   ├── text_processor.py        # 📝 文本处理器
-    │   ├── vision_processor.py      # 🖼 视觉处理器
-    │   ├── audio_processor.py       # 🎵 音频处理器
-    │   └── video_processor.py       # 🎬 视频处理器
-    ├── memory/
-    │   ├── __init__.py
-    │   ├── memory_manager.py        # 💾 记忆管理器
-    │   ├── episodic_memory.py       # 📖 经验记忆
-    │   ├── semantic_memory.py       # 🧩 知识记忆
-    │   └── procedural_memory.py     # ⚙️ 程序记忆
-    ├── models/
-    │   ├── __init__.py
-    │   ├── enums.py                 # 枚举定义
-    │   └── schemas.py               # 数据模型
-    └── utils/
-        ├── __init__.py
-        ├── llm_client.py            # LLM API 客户端
-        └── logger.py                # 结构化日志
+├── config.py                  # 全局配置（PinocchioConfig 数据类）
+├── main.py                    # CLI 交互入口
+├── pyproject.toml             # 包管理与工具配置
+├── requirements.txt           # 核心依赖
+├── pinocchio_system_prompt.md # 系统人设 prompt
+│
+├── pinocchio/                 # 核心包
+│   ├── __init__.py
+│   ├── orchestrator.py        # 顶层编排器 — 驱动认知循环
+│   │
+│   ├── agents/                # 6 个认知循环子智能体
+│   │   ├── base_agent.py          # 抽象基类（共享 LLM / 记忆 / 日志）
+│   │   ├── perception_agent.py    # Phase 1: 感知 — 输入分析与分类
+│   │   ├── strategy_agent.py      # Phase 2: 策略 — 方案选择与风险评估
+│   │   ├── execution_agent.py     # Phase 3: 执行 — 生成用户响应
+│   │   ├── evaluation_agent.py    # Phase 4: 评估 — 质量评分与问题识别
+│   │   ├── learning_agent.py      # Phase 5: 学习 — 提取教训、更新记忆
+│   │   └── meta_reflection_agent.py # Phase 6: 元反思 — 高阶自我分析
+│   │
+│   ├── memory/                # 三层记忆系统
+│   │   ├── memory_manager.py      # 统一门面（facade）
+│   │   ├── episodic_memory.py     # 情景记忆 — 交互历史
+│   │   ├── semantic_memory.py     # 语义记忆 — 蒸馏知识
+│   │   └── procedural_memory.py   # 程序记忆 — 可复用策略
+│   │
+│   ├── models/                # 数据模型
+│   │   ├── enums.py               # 枚举（Modality, TaskType, AgentRole...）
+│   │   └── schemas.py             # 数据类（记忆记录、认知结果、消息）
+│   │
+│   ├── multimodal/            # 模态处理器
+│   │   ├── text_processor.py      # 文本理解 & 生成
+│   │   ├── vision_processor.py    # 图像理解 & VQA & OCR
+│   │   ├── audio_processor.py     # 音频转写 & 情感分析
+│   │   └── video_processor.py     # 视频理解（原生 + ffmpeg 回退）
+│   │
+│   └── utils/                 # 基础工具
+│       ├── llm_client.py          # LLM API 封装（同步 + 异步）
+│       ├── logger.py              # 彩色结构化日志
+│       ├── resource_monitor.py    # CPU / GPU / RAM 检测
+│       └── parallel_executor.py   # 资源感知并行执行器
+│
+├── scripts/                   # 辅助脚本
+│   └── generate_demo_video.py     # 演示视频生成器
+│
+└── tests/                     # 测试套件（390+ 测试，99% 覆盖率）
+    ├── conftest.py
+    ├── test_agents.py
+    ├── test_cognitive_loop.py
+    ├── test_integration.py
+    ├── test_memory.py
+    ├── test_memory_edge.py
+    ├── test_models.py
+    ├── test_multimodal.py
+    ├── test_orchestrator_deep.py
+    ├── test_resource_parallel.py
+    ├── test_stress_integration.py
+    └── test_utils.py
 ```
-
----
-
-## 🤖 智能体与子智能体详细说明
-
-### 🎭 Pinocchio Orchestrator（主编排器）
-
-**文件**: `pinocchio/orchestrator.py`
-
-主编排器是整个系统的指挥中心，负责驱动六阶段认知循环并协调所有子智能体。
-
-| 技能 | 描述 |
-|------|------|
-| **认知循环协调** | 驱动 PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT 完整流程，确保每个阶段都不被跳过 |
-| **子智能体调度** | 在每个阶段路由到正确的子智能体，并在它们之间流畅传递上下文 |
-| **多模态路由** | 自动检测输入包含哪些模态，调用相应的模态处理器 |
-| **用户模型管理** | 维护和更新自适应用户模型，跟踪用户的专业水平、沟通风格和兴趣领域 |
-| **会话管理** | 跟踪交互次数、管理对话历史，提供 `chat()` / `reset()` / `status()` 外部 API |
-| **元反思调度** | 按配置间隔触发 MetaReflectionAgent（默认每 5 次交互） |
-| **错误恢复** | 捕获子智能体的异常，记录错误并回退到安全响应 |
-| **记忆持久化** | 确保每次交互后所有记忆存储都被保存到磁盘 |
-
----
-
-### 👁 PerceptionAgent（感知智能体）
-
-**文件**: `pinocchio/agents/perception_agent.py` | **阶段**: Phase 1 — PERCEIVE
-
-在采取任何行动之前，对用户输入进行全面分析。
-
-| 技能 | 描述 |
-|------|------|
-| **模态检测** | 识别输入中包含哪些模态（文本/图像/音频/视频），评估每种模态对任务的重要程度 |
-| **任务分类** | 将用户请求映射到预定义的 TaskType 类别（问答、代码生成、分析、创意写作、多模态推理等） |
-| **复杂度评估** | 基于推理步骤数、所需领域知识和模态交互，将任务复杂度评定为 1-5 级 |
-| **记忆检索** | 查询经验记忆库，找到与当前输入最相似的历史交互，并提取相关教训 |
-| **歧义检测** | 标记输入中规格不足或可能产生误解的部分，以便下游智能体请求澄清或采用备选策略 |
-| **置信度估计** | 结合当前知识储备，输出整体置信度（低/中/高）评估 |
-
----
-
-### 🧠 StrategyAgent（策略智能体）
-
-**文件**: `pinocchio/agents/strategy_agent.py` | **阶段**: Phase 2 — STRATEGIZE
-
-根据感知分析结果，选择或构建最佳执行策略。
-
-| 技能 | 描述 |
-|------|------|
-| **策略选择** | 搜索程序记忆中与当前任务类型匹配的已验证策略，优先复用高成功率的流程 |
-| **新策略构建** | 当没有现成策略时，从第一性原理出发设计新策略，并标记为"实验性"以便追踪效果 |
-| **风险评估** | 识别选定策略可能出错的地方及失败概率 |
-| **备选方案规划** | 定义主要策略失败时的替代方案 |
-| **模态管线设计** | 为多模态任务指定跨模态处理顺序和方法（如「图像→描述→推理→文本」） |
-| **融合策略选择** | 根据任务性质在早期融合、晚期融合和混合融合之间选择 |
-| **教训整合** | 将历史教训纳入策略设计，避免已知的失败模式 |
-
----
-
-### ⚡ ExecutionAgent（执行智能体）
-
-**文件**: `pinocchio/agents/execution_agent.py` | **阶段**: Phase 3 — EXECUTE
-
-按照策略计划生成实际的用户响应。
-
-| 技能 | 描述 |
-|------|------|
-| **计划执行** | 逐步遵循策略计划，生成中间输出并组装为连贯的最终结果 |
-| **自适应重规划** | 如果中间步骤产生意外或低质量输出，暂停并切换到备选方案，而非盲目继续 |
-| **多模态输出组装** | 构建可能结合文本、图像等多种模态的响应，确保跨模态一致性 |
-| **质量监控** | 持续评估中间结果是否达标，并实时调整方法 |
-| **工具调用** | 当策略需要外部工具（网络搜索、代码执行、图像生成等）时，调度相应工具并整合结果 |
-| **上下文管理** | 高效管理 LLM 上下文窗口，通过摘要保留最相关的信息 |
-| **跨模态一致性执行** | 生成多模态输出时，验证各模态间信息的连贯性和非矛盾性 |
-
----
-
-### 📊 EvaluationAgent（评估智能体）
-
-**文件**: `pinocchio/agents/evaluation_agent.py` | **阶段**: Phase 4 — EVALUATE
-
-对执行结果进行严格的自我评估。
-
-| 技能 | 描述 |
-|------|------|
-| **输出质量评分** | 从准确性、完整性、清晰度、实用性四个维度对响应质量评分 (1-10) |
-| **策略有效性评分** | 评定所选策略对任务的服务程度：是否高效？是否一次性得出好结果？ (1-10) |
-| **跨模态一致性评估** | 对多模态输出检查信息跨模态的一致性和互补性 (1-10) |
-| **成功/失败分析** | 逐项列举执行中做得好的和做得不好的地方 |
-| **意外因素识别** | 标记处理过程中遇到的出乎意料的元素——这些是高价值学习信号 |
-| **用户满意度推断** | 基于用户后续反馈推断满意度；无反馈时标记为"等待中" |
-| **完成状态分类** | 判定任务是完全完成、部分完成还是失败 |
-
----
-
-### 📚 LearningAgent（学习智能体）
-
-**文件**: `pinocchio/agents/learning_agent.py` | **阶段**: Phase 5 — LEARN
-
-从完成的交互中提取和巩固学习成果，更新所有三个记忆存储。
-
-| 技能 | 描述 |
-|------|------|
-| **教训提取** | 从评估结果中蒸馏具体、可重用的教训——不是空泛的格言，而是可操作的洞察 |
-| **经验记忆更新** | 创建结构化的 `EpisodicRecord` 捕获完整交互轨迹（意图、策略、得分、教训、错误模式） |
-| **知识记忆更新** | 当教训具备跨任务适用性时，创建或强化 `SemanticEntry` |
-| **程序记忆更新** | 当策略证明有效（得分 ≥ 7）时，将其编码为 `ProceduralEntry`；失败则降低已有流程的成功率 |
-| **策略改进建议** | 为下次执行提出具体修改方案（保留什么、改变什么、放弃什么） |
-| **技能差距识别** | 标识智能体能力不足的领域，为刻意练习提供方向 |
-| **知识合成触发** | 当某领域累积超过 10 个经验片段时，触发合成操作以蒸馏出高阶启发式规则 |
-
----
-
-### 🔮 MetaReflectionAgent（元反思智能体）
-
-**文件**: `pinocchio/agents/meta_reflection_agent.py` | **阶段**: Phase 6 — META-REFLECT
-
-周期性触发（每 5 次交互），执行高阶自我反思。
-
-| 技能 | 描述 |
-|------|------|
-| **模式分析** | 分析累积的经验片段，识别反复出现的错误类型、优势领域、弱势领域和策略演变轨迹 |
-| **认知偏差检测** | 检查是否过度依赖某些策略、回避某些任务类型、或错误校准了自信程度 |
-| **学习效率评估** | 评估每次交互是否提取了足够的价值、教训是否过于具体或笼统、程序记忆是否切实提升了表现 |
-| **进化计划生成** | 产出优先改进领域的排名列表、待尝试的实验性策略、以及需要主动填补的知识空白 |
-| **改进趋势追踪** | 将近期性能指标与历史平均值对比，检测进步或退步 |
-| **策略组合再平衡** | 识别过度使用和使用不足的策略，推荐多样化调整 |
-| **跨领域知识迁移** | 寻找机会将某个领域的经验教训应用到另一个领域，促进知识交叉繁衍 |
-
----
-
-## 🖼 多模态处理器详细说明
-
-### 📝 TextProcessor（文本处理器）
-
-**文件**: `pinocchio/multimodal/text_processor.py`
-
-| 技能 | 描述 |
-|------|------|
-| **文本理解** | 深度理解用户查询——意图提取、情感分析、命名实体识别、语义解析 |
-| **文本生成** | 以任何风格和格式生成高质量文本：回答、摘要、分析、创意写作、代码等 |
-| **语言检测与翻译** | 检测输入语言并在语言之间翻译，保留语义细微差别和语气 |
-| **文本摘要** | 将长文档压缩为不同详细程度的简洁摘要（抽象式和抽取式） |
-| **文本→其他模态桥接** | 生成适合喂入图像/音频/视频生成管线的结构化描述 |
-| **语义相似度评分** | 比较两段文本的语义重叠度，用于去重和相关性排序 |
-| **结构化信息抽取** | 将非结构化文本解析为结构化格式（JSON、表格、键值对） |
-
----
-
-### 🖼 VisionProcessor（视觉处理器）
-
-**文件**: `pinocchio/multimodal/vision_processor.py`
-
-| 技能 | 描述 |
-|------|------|
-| **图像理解** | 分析图像并产出丰富的上下文描述：物体、场景布局、颜色、文字(OCR)、视觉语义 |
-| **视觉问答 (VQA)** | 回答关于图像内容的任意自然语言问题 |
-| **OCR / 文字提取** | 提取图像中可见的任何文字，包括手写、标志、标签和屏幕内容 |
-| **图像比较** | 比较两张或多张图像，描述它们的异同 |
-| **图像→文本标注** | 生成简洁或详细的图像说明，适用于无障碍、文档或下游推理 |
-| **视觉推理** | 执行多步视觉推理——计数物体、推断关系、空间推理 |
-| **图表/图解释读** | 理解图表、图形、示意图和信息图，提取数据点和高层要点 |
-
----
-
-### 🎵 AudioProcessor（音频处理器）
-
-**文件**: `pinocchio/multimodal/audio_processor.py`
-
-| 技能 | 描述 |
-|------|------|
-| **语音转文字** | 使用 Qwen2.5-Omni 原生音频输入将语音转为精确文字，支持多语言 |
-| **语气与情感分析** | 超越原始转录，从文本线索和副语言标记推断说话者的语气、情绪和强调 |
-| **音频摘要** | 从转录文本生成长音频记录（播客、会议、讲座）的简洁摘要 |
-| **说话人分离提示** | 当多位说话者在场时，尝试按说话者轮次分割转录 |
-| **音频→文本桥接** | 生成音频内容的结构化文字表示，适合下游智能体推理使用 |
-| **音乐/声音事件描述** | 对非语音音频，描述声音、乐器、节奏和所传达的情绪 |
-| **多语言支持** | 处理转录后端支持的任何语言的音频，并自动检测所说语言 |
-
----
-
-### 🎬 VideoProcessor（视频处理器）
-
-**文件**: `pinocchio/multimodal/video_processor.py`
-
-| 技能 | 描述 |
-|------|------|
-| **关键帧提取** | 以可配置间隔从视频中采样代表性帧，捕获视频的视觉叙事 |
-| **逐帧分析** | 使用 VisionProcessor 分析提取的关键帧，理解场景进展、物体追踪和视觉变化 |
-| **音轨提取与转录** | 从视频文件中提取音轨，并使用 AudioProcessor 进行转录 |
-| **时序推理** | 对视频中事件的序列和时间进行推理——理解关键时刻之前、之中和之后发生了什么 |
-| **视频摘要** | 结合视觉和音频信息，生成视频内容的综合摘要 |
-| **动作/事件检测** | 识别和描述视频中发生的重要动作或事件 |
-| **跨模态视频理解** | 融合视觉帧分析与音频转录，产出统一的视频内容理解 |
-
----
-
-## 💾 记忆系统详细说明
-
-### 📖 EpisodicMemory（经验记忆）
-
-**文件**: `pinocchio/memory/episodic_memory.py`
-
-每次交互的完整记录，相当于"日记"。
-
-| 能力 | 描述 |
-|------|------|
-| 存储和检索完整的交互片段 | 支持按 episode_id 精确查找 |
-| 按任务类型搜索 | 查找特定类型的历史交互 |
-| 按模态搜索 | 查找涉及特定模态的历史交互 |
-| 关键词搜索 | 在意图、策略、教训和备注中进行文本检索 |
-| 相似度查找 | 基于任务类型 + 模态重叠度的启发式相似度匹配 |
-| 聚合统计 | 平均得分、错误频率、最近教训汇总 |
-| JSON 持久化 | 跨会话保存到磁盘 |
-
-### 🧩 SemanticMemory（知识记忆）
-
-**文件**: `pinocchio/memory/semantic_memory.py`
-
-从多次经验中提炼出的通用化知识，相当于"教科书"。
-
-| 能力 | 描述 |
-|------|------|
-| 存储带领域标签的知识条目 | 每条知识关联到来源经验片段 |
-| 按领域/ 关键词检索 | 快速找到相关知识 |
-| 置信度管理 | 随证据积累更新知识置信度 |
-| 高置信度筛选 | 返回置信度超过阈值的知识条目 |
-| 合成触发检测 | 当某领域积累足够多经验片段时发出合成信号 |
-
-### ⚙️ ProceduralMemory（程序记忆）
-
-**文件**: `pinocchio/memory/procedural_memory.py`
-
-可复用的行动模板和决策树，相当于"操作手册"。
-
-| 能力 | 描述 |
-|------|------|
-| 存储和检索可复用的流程模板 | 包含步骤列表、任务类型、描述 |
-| 最佳流程查找 | 按成功率排序返回最优流程 |
-| 使用追踪 | 记录每次使用及成功/失败，增量更新成功率 |
-| 流程优化 | 用改进版本替换流程步骤 |
-| 全局排名 | 返回全局成功率最高的流程（最少 2 次使用） |
-
-### 💾 MemoryManager（记忆管理器）
-
-**文件**: `pinocchio/memory/memory_manager.py`
-
-三类记忆的统一门面，提供跨记忆协调操作。
-
-| 能力 | 描述 |
-|------|------|
-| 统一召回 | 一次调用搜索全部三个记忆库，返回相似经验 + 相关知识 + 最佳流程 + 最近教训 |
-| 跨记忆存储 | 协调经验片段存储并检查是否需要知识合成 |
-| 改进趋势分析 | 用滑动窗口对比近期和历史平均得分，检测进步/退步/稳定 |
-| 全局摘要 | 返回所有记忆库的高层统计信息 |
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-pip install -r requirements.txt
+# 克隆项目
+git clone https://github.com/yujansen/Multimodal_Agent.git
+cd Multimodal_Agent
+
+# 创建虚拟环境
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装（可编辑模式，含开发依赖）
+pip install -e ".[dev]"
 ```
 
-### 2. 设置环境变量
+### 2. 启动 Ollama 后端
 
 ```bash
-# Ollama 本地运行，无需设置 API Key
-# 可选配置
-export PINOCCHIO_MODEL="qwen2.5-omni"     # 使用的模型
-export OPENAI_BASE_URL="http://localhost:11434/v1"  # Ollama 默认端点
-export PINOCCHIO_DATA_DIR="data"          # 记忆存储目录
+# 安装 Ollama（macOS）
+brew install ollama
+
+# 拉取 Qwen2.5-Omni 模型
+ollama pull qwen2.5-omni
+
+# 启动服务（默认监听 localhost:11434）
+ollama serve
 ```
 
 ### 3. 运行
@@ -379,66 +124,240 @@ export PINOCCHIO_DATA_DIR="data"          # 记忆存储目录
 python main.py
 ```
 
-### 4. 在代码中使用
+交互示例：
+
+```
+🧑 You: 请用简单的语言解释量子纠缠
+
+── Phase 1: PERCEIVE 感知 ──────────────────
+[PERCEPTION] Task type: question_answering | Complexity: 3 | Confidence: high
+
+── Phase 2: STRATEGIZE 策略 ────────────────
+[STRATEGY] Strategy: structured_explanation | Novel: false
+
+── Phase 3: EXECUTE 执行 ────────────────────
+[EXECUTION] Executing strategy: structured_explanation
+
+── Phase 4: EVALUATE 评估 ──────────────────
+[EVALUATION] Quality: 8/10 | Strategy: 8/10 | Status: complete
+
+── Phase 5: LEARN 学习 ──────────────────────
+[LEARNING] Stored episode abc12345 (score: 8/10)
+
+🤖 Pinocchio: 量子纠缠就像是两个粒子之间的一种"超距关联"...
+```
+
+---
+
+## 📖 使用方式
+
+### Python API
 
 ```python
 from pinocchio import Pinocchio
 
-agent = Pinocchio(model="qwen2.5-omni")
+# 使用默认配置
+agent = Pinocchio()
 
-# 纯文本交互
-response = agent.chat("解释量子纠缠的核心概念")
+# 纯文本对话
+response = agent.chat("用 Python 写一个快速排序")
+print(response)
 
-# 多模态交互 (文本 + 图像)
+# 图片理解
 response = agent.chat(
-    "这张图片中有什么？",
-    image_paths=["photo.jpg"]
+    "这张图片里有什么？",
+    image_paths=["photo.jpg"],
+)
+
+# 音频转写
+response = agent.chat(
+    "总结这段会议录音的要点",
+    audio_paths=["meeting.wav"],
+)
+
+# 视频分析
+response = agent.chat(
+    "描述这个视频的主要内容",
+    video_paths=["lecture.mp4"],
+)
+
+# 多模态混合输入
+response = agent.chat(
+    "对比这张图片和这段视频的内容",
+    image_paths=["photo.jpg"],
+    video_paths=["clip.mp4"],
 )
 
 # 查看智能体状态
-print(agent.status())
+import json
+print(json.dumps(agent.status(), ensure_ascii=False, indent=2))
+```
+
+### 异步调用
+
+```python
+import asyncio
+from pinocchio import Pinocchio
+
+agent = Pinocchio()
+
+async def main():
+    response = await agent.async_chat("Hello, Pinocchio!")
+    print(response)
+
+asyncio.run(main())
+```
+
+### 自定义配置
+
+```python
+from config import PinocchioConfig
+from pinocchio import Pinocchio
+
+cfg = PinocchioConfig()
+
+agent = Pinocchio(
+    model=cfg.model,
+    api_key=cfg.api_key,
+    base_url=cfg.base_url,
+    data_dir=cfg.data_dir,
+    verbose=cfg.verbose,
+    max_workers=cfg.max_workers,
+    parallel_modalities=cfg.parallel_modalities,
+    meta_reflect_interval=cfg.meta_reflect_interval,
+)
+```
+
+### 环境变量
+
+```bash
+export PINOCCHIO_MODEL="qwen2.5-omni"
+export OPENAI_BASE_URL="http://localhost:11434/v1"
+export PINOCCHIO_DATA_DIR="./my_data"
+export PINOCCHIO_MAX_WORKERS=4
+export PINOCCHIO_PARALLEL=true
 ```
 
 ---
 
-## 🧬 自进化机制详解
+## 🧠 架构设计
 
-### 学习循环的每一步如何生效
+### 认知循环
 
 ```
-交互 #1: 用户问"什么是 RAG?"
-  → 感知: 任务=问答, 复杂度=2, 无历史
-  → 策略: 从第一性原理解答 (标记为实验性)
-  → 执行: 生成回答
-  → 评估: 质量 8/10, 策略有效 7/10
-  → 学习: 存储经验, 提取教训"解释技术概念时用类比效果好",
-          保存为新的流程模板
-
-交互 #5: 用户问"解释 RLHF"
-  → 感知: 任务=问答, 复杂度=3, 找到相似经验 #1
-  → 策略: 复用已验证流程 + 加入类比 (来自教训)
-  → 执行: 生成更好的回答
-  → 评估: 质量 9/10, 策略有效 9/10
-  → 学习: 更新流程成功率, 强化知识条目的置信度
-  → 元反思: 检测到"技术解释"领域是优势, 建议也尝试更复杂的任务
+用户输入  ──►  ┌──────────┐   ┌──────────┐   ┌──────────┐
+               │ PERCEIVE │──►│STRATEGIZE│──►│ EXECUTE  │
+               │ 感知分析 │   │ 策略选择 │   │ 生成响应 │
+               └──────────┘   └──────────┘   └────┬─────┘
+                                                   │
+用户输出  ◄──  ┌────────────┐  ┌──────────┐  ┌────▼─────┐
+               │META-REFLECT│◄─│  LEARN   │◄─│ EVALUATE │
+               │元反思(周期) │  │ 提取教训 │  │ 质量评估 │
+               └────────────┘  └──────────┘  └──────────┘
 ```
 
-### 为什么这个设计有效？
+每个阶段由独立的子智能体执行，通过 Orchestrator 统一调度。所有阶段共享同一个 LLM 实例和三层记忆系统。
 
-1. **不依赖权重更新**: 通过结构化记忆实现"软进化"，纯推理时改进
-2. **错误不会白犯**: 每个错误都被分类、记录、转化为防护规则
-3. **策略自然选择**: 高成功率的策略被优先复用，低效策略被淘汰
-4. **元认知防盲点**: 定期跳出执行层面审视全局，发现系统性问题
-5. **跨域迁移**: 在 A 领域学到的教训可以被 B 领域的相似任务召回
+### 三层记忆系统
+
+| 记忆类型 | 人类类比 | 存储内容 | 索引方式 | 持久化 |
+|----------|----------|----------|----------|--------|
+| **情景记忆** | "我记得那次…" | 交互痕迹（意图、策略、分数、教训） | task_type / modality 倒排索引 | JSON |
+| **语义记忆** | "我知道…" | 从多次经验蒸馏的通用知识 | domain 倒排索引 | JSON |
+| **程序记忆** | "我会…" | 可复用的策略模板（步骤、成功率） | task_type 倒排索引 | JSON |
+
+**知识合成机制**：当某个领域的情景记忆达到阈值（默认 10 条），系统会标记该领域进行知识蒸馏，由 LearningAgent 将具体经验提炼为通用语义知识。
+
+### 多模态处理
+
+```
+             ┌── TextProcessor ──┐
+             │                   │
+用户输入 ──► ├── VisionProcessor ├──► 融合上下文 ──► ExecutionAgent
+             │                   │
+             ├── AudioProcessor ──┤
+             │                   │
+             └── VideoProcessor ──┘
+```
+
+- **并行模式**：多线程并发处理各模态（`ThreadPoolExecutor`）
+- **顺序回退**：单核环境自动降级为顺序处理
+- **融合策略**：`early_fusion` / `late_fusion` / `hybrid_fusion`
+- **视频处理**：优先原生 Qwen2.5-Omni 视频输入，回退至 ffmpeg 抽帧 + 分析
 
 ---
 
-## 📄 许可证
+## 🧪 测试
 
-本项目采用 [MIT License](LICENSE) 开源。
+```bash
+# 运行全部测试
+pytest
+
+# 带覆盖率报告
+pytest --cov=pinocchio --cov-report=term-missing
+
+# 仅运行快速测试
+pytest -m "not slow"
+
+# 指定测试文件
+pytest tests/test_agents.py -v
+```
+
+当前状态：**390+ 测试，99% 代码覆盖率**
+
+---
+
+## ⚙️ 配置参考
+
+| 参数 | 类型 | 默认值 | 环境变量 | 说明 |
+|------|------|--------|----------|------|
+| `model` | `str` | `qwen2.5-omni` | `PINOCCHIO_MODEL` | LLM 模型名称 |
+| `api_key` | `str` | `ollama` | `OLLAMA_API_KEY` | API 密钥 |
+| `base_url` | `str` | `http://localhost:11434/v1` | `OPENAI_BASE_URL` | API 基础 URL |
+| `temperature` | `float` | `0.7` | — | 生成温度 |
+| `max_tokens` | `int` | `4096` | — | 最大生成 tokens |
+| `data_dir` | `str` | `data` | `PINOCCHIO_DATA_DIR` | 记忆持久化目录 |
+| `meta_reflect_interval` | `int` | `5` | — | 元反思触发间隔 |
+| `max_workers` | `int\|None` | auto | `PINOCCHIO_MAX_WORKERS` | 最大并行线程数 |
+| `parallel_modalities` | `bool` | `True` | `PINOCCHIO_PARALLEL` | 并行处理多模态 |
+
+---
+
+## 🛠️ 开发指南
+
+### 代码风格
+
+项目使用 [Ruff](https://docs.astral.sh/ruff/) 进行格式化和 lint：
+
+```bash
+pip install ruff
+ruff check pinocchio/
+ruff format pinocchio/
+```
+
+### 添加新的子智能体
+
+1. 在 `pinocchio/agents/` 下创建新文件，继承 `BaseAgent`
+2. 设置 `role = AgentRole.YOUR_ROLE`（需先在 `enums.py` 注册）
+3. 实现 `run(**kwargs)` 方法
+4. 在 `pinocchio/agents/__init__.py` 中注册导出
+5. 在 `orchestrator.py` 的认知循环中集成调用
+6. 编写对应的测试用例
+
+### 添加新的模态处理器
+
+1. 在 `pinocchio/multimodal/` 下创建新文件，继承 `BaseAgent`
+2. 在 `enums.py` 中添加新的 `Modality` 和 `AgentRole` 枚举值
+3. 在 `LLMClient` 中添加 `build_xxx_message()` 构建方法
+4. 在 `orchestrator.py` 的 `_preprocess_modalities()` 中注册
+5. 在 `pinocchio/multimodal/__init__.py` 中导出
 
 ---
 
 ## 👤 作者与维护者
 
 **Jansen Yu** — [@yujansen](https://github.com/yujansen)
+
+## 📄 许可证
+
+[MIT License](LICENSE)

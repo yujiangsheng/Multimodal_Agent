@@ -65,7 +65,7 @@ Output valid JSON:
 }
 """
 
-META_REFLECT_INTERVAL = 5  # trigger every N interactions
+_DEFAULT_META_REFLECT_INTERVAL = 5  # trigger every N interactions
 
 
 class MetaReflectionAgent(BaseAgent):
@@ -73,10 +73,21 @@ class MetaReflectionAgent(BaseAgent):
 
     role = AgentRole.META_REFLECTION
 
+    def __init__(
+        self,
+        llm: Any,
+        memory: Any,
+        logger: Any,
+        *,
+        meta_reflect_interval: int | None = None,
+    ) -> None:
+        super().__init__(llm, memory, logger)
+        self._interval = meta_reflect_interval or _DEFAULT_META_REFLECT_INTERVAL
+
     def should_trigger(self) -> bool:
         """Check if it's time for a meta-reflection cycle."""
         total_episodes = self.memory.episodic.count
-        return total_episodes > 0 and total_episodes % META_REFLECT_INTERVAL == 0
+        return total_episodes > 0 and total_episodes % self._interval == 0
 
     def run(self, **kwargs: Any) -> MetaReflectionResult:  # type: ignore[override]
         self.logger.phase("Phase 6: META-REFLECT 元反思")
@@ -84,7 +95,7 @@ class MetaReflectionAgent(BaseAgent):
 
         # Gather analytics
         summary = self.memory.summary()
-        trend = self.memory.improvement_trend(window=META_REFLECT_INTERVAL)
+        trend = self.memory.improvement_trend(window=self._interval)
         recent_lessons = self.memory.episodic.recent_lessons(limit=15)
         error_freq = self.memory.episodic.error_frequency()
 
@@ -95,7 +106,7 @@ class MetaReflectionAgent(BaseAgent):
             f"Procedures: {summary['procedural_count']}\n"
             f"Average score: {summary['avg_score']}\n"
             f"Top procedures: {summary['top_procedures']}\n\n"
-            f"=== IMPROVEMENT TREND ===\n{trend}\n\n"
+            f"=== IMPROVEMENT TREND (window={self._interval}) ===\n{trend}\n\n"
             f"=== ERROR FREQUENCY ===\n{error_freq}\n\n"
             f"=== RECENT LESSONS ===\n"
             + "\n".join(f"  - {l}" for l in recent_lessons)

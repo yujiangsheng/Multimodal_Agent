@@ -43,6 +43,7 @@ Skills / Capabilities (as the Orchestrator)
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -94,6 +95,7 @@ class Pinocchio:
         verbose: bool = True,
         max_workers: int | None = None,
         parallel_modalities: bool = True,
+        meta_reflect_interval: int = 5,
     ) -> None:
         # Shared infrastructure
         self.llm = LLMClient(model=model, api_key=api_key, base_url=base_url)
@@ -106,7 +108,10 @@ class Pinocchio:
         self.execution = ExecutionAgent(self.llm, self.memory, self.logger)
         self.evaluation = EvaluationAgent(self.llm, self.memory, self.logger)
         self.learning = LearningAgent(self.llm, self.memory, self.logger)
-        self.meta_reflection = MetaReflectionAgent(self.llm, self.memory, self.logger)
+        self.meta_reflection = MetaReflectionAgent(
+            self.llm, self.memory, self.logger,
+            meta_reflect_interval=meta_reflect_interval,
+        )
 
         # Multimodal processor pool
         self.text_proc = TextProcessor(self.llm, self.memory, self.logger)
@@ -199,6 +204,32 @@ class Pinocchio:
         )
 
         return response.content
+
+    async def async_chat(
+        self,
+        text: str | None = None,
+        *,
+        image_paths: list[str] | None = None,
+        audio_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+    ) -> str:
+        """Async version of :meth:`chat` — runs the cognitive loop off the event loop.
+
+        This wraps the synchronous cognitive loop in ``asyncio.to_thread``
+        so it doesn't block other coroutines.  For truly async modality
+        preprocessing, use :class:`AsyncLLMClient`.
+
+        Usage
+        -----
+        >>> response = await agent.async_chat("Explain quantum entanglement.")
+        """
+        return await asyncio.to_thread(
+            self.chat,
+            text,
+            image_paths=image_paths,
+            audio_paths=audio_paths,
+            video_paths=video_paths,
+        )
 
     def greet(self) -> str:
         """Return the initialization greeting."""

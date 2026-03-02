@@ -1,4 +1,17 @@
-"""Pinocchio sub-agent modules."""
+"""Pinocchio cognitive-loop sub-agents.
+
+Six agents form the self-evolving cognitive loop:
+
+1. :class:`PerceptionAgent`     — PERCEIVE: analyse & classify input
+2. :class:`StrategyAgent`       — STRATEGIZE: select approach & plan
+3. :class:`ExecutionAgent`      — EXECUTE: generate the response
+4. :class:`EvaluationAgent`     — EVALUATE: score quality & effectiveness
+5. :class:`LearningAgent`       — LEARN: extract lessons, update memory
+6. :class:`MetaReflectionAgent` — META-REFLECT: periodic higher-order analysis
+
+All inherit from :class:`BaseAgent` which provides shared LLM, memory,
+and logging access.
+"""
 
 from pinocchio.agents.base_agent import BaseAgent
 from pinocchio.agents.perception_agent import PerceptionAgent

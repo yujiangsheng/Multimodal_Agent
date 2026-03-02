@@ -9,11 +9,13 @@ Default backend: Qwen2.5-Omni via local Ollama server.
 Performance features:
 - HTTP connection pooling via httpx (reuses TCP connections)
 - Thread-safe: safe to call from multiple parallel workers
+- Async support via ``AsyncLLMClient`` for high-throughput pipelines
 - Configurable timeout and retry
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -203,3 +205,110 @@ class LLMClient:
         """Guess the audio format from a file path / URL suffix."""
         suffix = Path(path_or_url).suffix.lower().lstrip(".")
         return {"wav": "wav", "mp3": "mp3", "flac": "flac", "ogg": "ogg"}.get(suffix, "wav")
+
+
+# ======================================================================
+# Async variant
+# ======================================================================
+
+class AsyncLLMClient:
+    """Async wrapper around an OpenAI-compatible chat completions API.
+
+    Provides the same interface as :class:`LLMClient` but uses
+    ``openai.AsyncOpenAI`` and async httpx under the hood.  Suitable for
+    ``asyncio.gather``-style parallel modality processing.
+
+    Usage
+    -----
+    >>> client = AsyncLLMClient()
+    >>> response = await client.chat([{"role": "user", "content": "hi"}])
+    """
+
+    def __init__(
+        self,
+        model: str = _DEFAULT_MODEL,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        timeout: float = 120.0,
+        max_retries: int = 2,
+    ) -> None:
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+        resolved_key = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
+        resolved_url = base_url or _DEFAULT_BASE_URL
+
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
+        )
+        self._client = openai.AsyncOpenAI(
+            api_key=resolved_key,
+            base_url=resolved_url,
+            http_client=http_client,
+            max_retries=max_retries,
+        )
+
+    # ------------------------------------------------------------------
+    # Core async completion
+    # ------------------------------------------------------------------
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> str:
+        """Send an async chat completion request."""
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens or self.max_tokens,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = await self._client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content or ""
+        return content.strip()
+
+    async def ask(self, system: str, user: str, **kwargs: Any) -> str:
+        """Async system + user message call."""
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        return await self.chat(messages, **kwargs)
+
+    async def ask_json(self, system: str, user: str, **kwargs: Any) -> dict[str, Any]:
+        """Async call returning parsed JSON."""
+        raw = await self.ask(system, user, json_mode=True, **kwargs)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0]
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0]
+            return json.loads(raw)
+
+    async def close(self) -> None:
+        """Close the underlying async HTTP client."""
+        await self._client.close()
+
+    # Delegate multimodal builders to LLMClient (they're sync/pure)
+    build_vision_message = LLMClient.build_vision_message
+    build_audio_message = LLMClient.build_audio_message
+    build_video_message = LLMClient.build_video_message
+    _resolve_audio_url = LLMClient._resolve_audio_url
+    _audio_format = LLMClient._audio_format

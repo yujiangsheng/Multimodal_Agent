@@ -1,4 +1,11 @@
-"""Pinocchio data models and enumerations."""
+"""Pinocchio data models and enumerations.
+
+This subpackage defines all structured types flowing through the system:
+
+* :mod:`enums`   — taxonomies (Modality, TaskType, AgentRole, …)
+* :mod:`schemas` — dataclasses for memory records, cognitive-loop results,
+                   and I/O messages
+"""
 
 from pinocchio.models.enums import (
     Modality,

@@ -33,6 +33,8 @@ class MemoryManager:
         self.episodic = EpisodicMemory(f"{data_dir}/episodic_memory.json")
         self.semantic = SemanticMemory(f"{data_dir}/semantic_memory.json")
         self.procedural = ProceduralMemory(f"{data_dir}/procedural_memory.json")
+        # Domains pending synthesis — consumed by LearningAgent
+        self._pending_synthesis: list[str] = []
 
     # ------------------------------------------------------------------
     # Unified recall
@@ -72,14 +74,23 @@ class MemoryManager:
     # ------------------------------------------------------------------
 
     def store_episode(self, episode: EpisodicRecord) -> None:
-        """Store an episode and check if knowledge synthesis is needed."""
+        """Store an episode and flag the domain for synthesis if threshold is reached."""
         self.episodic.add(episode)
-        # Check synthesis threshold for the episode's task domain
         domain = episode.task_type.value
         domain_episodes = self.episodic.search_by_task_type(episode.task_type, limit=100)
         if self.semantic.needs_synthesis(domain, len(domain_episodes)):
-            # Flag for synthesis (handled by LearningAgent)
-            pass
+            if domain not in self._pending_synthesis:
+                self._pending_synthesis.append(domain)
+
+    def pop_pending_synthesis(self) -> list[str]:
+        """Return and clear domains that are ready for knowledge synthesis.
+
+        This is consumed by the LearningAgent after each interaction to
+        decide whether to trigger cross-episode synthesis for specific domains.
+        """
+        domains = self._pending_synthesis.copy()
+        self._pending_synthesis.clear()
+        return domains
 
     def store_knowledge(self, entry: SemanticEntry) -> None:
         self.semantic.add(entry)

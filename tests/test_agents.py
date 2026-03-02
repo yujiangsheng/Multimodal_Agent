@@ -11,7 +11,7 @@ from pinocchio.agents.strategy_agent import StrategyAgent
 from pinocchio.agents.execution_agent import ExecutionAgent
 from pinocchio.agents.evaluation_agent import EvaluationAgent
 from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent, META_REFLECT_INTERVAL
+from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent, _DEFAULT_META_REFLECT_INTERVAL
 from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.models.enums import (
     AgentRole,
@@ -402,13 +402,13 @@ class TestMetaReflectionAgent:
     def test_should_trigger_on_interval(self, mock_llm, memory, logger):
         agent = MetaReflectionAgent(mock_llm, memory, logger)
         assert agent.should_trigger() is False  # 0 episodes
-        for i in range(META_REFLECT_INTERVAL):
+        for i in range(_DEFAULT_META_REFLECT_INTERVAL):
             memory.store_episode(EpisodicRecord(outcome_score=7))
         assert agent.should_trigger() is True
 
     def test_should_not_trigger_off_interval(self, mock_llm, memory, logger):
         agent = MetaReflectionAgent(mock_llm, memory, logger)
-        for _ in range(META_REFLECT_INTERVAL + 1):
+        for _ in range(_DEFAULT_META_REFLECT_INTERVAL + 1):
             memory.store_episode(EpisodicRecord())
         assert agent.should_trigger() is False  # 6 is not divisible by 5
 

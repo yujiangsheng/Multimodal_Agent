@@ -1,12 +1,19 @@
 """Pinocchio — Multimodal Self-Evolving Agent
 
-Entry-point for interactive CLI usage.
+Interactive CLI entry-point.  Starts a REPL loop where the user types
+messages and Pinocchio responds through a full 6-phase cognitive loop
+(PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT).
 
 Usage
 -----
     python main.py
 
-Optional env vars:
+Built-in commands (typed at the prompt):
+    ``quit`` / ``exit`` / ``q``  — exit the session
+    ``status``                   — print agent state as JSON
+    ``reset``                    — clear session (persistent memory kept)
+
+Optional environment variables:
     PINOCCHIO_MODEL       — LLM model name (default: qwen2.5-omni)
     OPENAI_BASE_URL       — Custom API base URL (default: http://localhost:11434/v1)
     PINOCCHIO_DATA_DIR    — Directory for persistent memory (default: data)
@@ -31,6 +38,7 @@ def main() -> None:
         verbose=cfg.verbose,
         max_workers=cfg.max_workers,
         parallel_modalities=cfg.parallel_modalities,
+        meta_reflect_interval=cfg.meta_reflect_interval,
     )
 
     print(agent.greet())

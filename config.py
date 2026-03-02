@@ -1,4 +1,23 @@
-"""Pinocchio agent configuration."""
+"""Pinocchio agent configuration.
+
+Centralises all tuneable parameters into a single ``PinocchioConfig``
+dataclass.  Every field can be overridden via an environment variable
+(see table below), making it easy to adjust behaviour in CI, Docker,
+or production without touching code.
+
+Environment Variables
+---------------------
+========================= ========================================
+Variable                  Description
+========================= ========================================
+``PINOCCHIO_MODEL``       LLM model name (default: ``qwen2.5-omni``)
+``OLLAMA_API_KEY``        API key (default: ``ollama``)
+``OPENAI_BASE_URL``       Base URL for the OpenAI-compatible API
+``PINOCCHIO_DATA_DIR``    Directory for persistent memory files
+``PINOCCHIO_MAX_WORKERS`` Max parallel worker threads (auto if unset)
+``PINOCCHIO_PARALLEL``    Enable parallel modality preprocessing
+========================= ========================================
+"""
 
 from __future__ import annotations
 

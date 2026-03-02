@@ -338,10 +338,16 @@ Then begin the PERCEIVE phase for the user's first message.
 ## 5. 使用方式
 
 将 **第3节中的完整系统提示词** 作为多模态 LLM 的 system prompt 注入。
-配合外部记忆存储（如向量数据库或结构化 JSON 存储），实现记忆的持久化。
+配合结构化 JSON 文件存储，实现三层记忆的持久化。
 
-### 推荐技术栈
-- **LLM**: GPT-4o / Claude 3.5 Sonnet / Gemini 1.5 Pro（或更新模型）
-- **记忆存储**: ChromaDB / Pinecone + Redis（热记忆缓存）
-- **编排框架**: LangChain / LlamaIndex / AutoGen
-- **多模态处理**: 原生多模态 API 或专用模型管道
+### 当前技术栈
+- **LLM**: Qwen2.5-Omni（通过本地 Ollama 服务，OpenAI 兼容 API）
+- **记忆存储**: JSON 文件 + 倒排索引（无需外部数据库）
+- **编排框架**: 自研 Orchestrator（`pinocchio/orchestrator.py`）
+- **多模态处理**: Qwen2.5-Omni 原生多模态输入（文本 / 图像 / 音频 / 视频）
+- **并行处理**: `ThreadPoolExecutor` + `ResourceMonitor` 硬件感知调度
+
+### 兼容的替代方案
+- **LLM**: 任何 OpenAI 兼容 API（GPT-4o、Claude、Gemini、vLLM 等）
+- **记忆存储**: 可扩展为向量数据库（ChromaDB / Pinecone）以支持语义检索
+- **部署**: 支持通过环境变量配置远程 API 端点

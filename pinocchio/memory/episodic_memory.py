@@ -4,11 +4,16 @@ Each episode captures the full trace of a single interaction: what was asked,
 how the agent reasoned, what strategy it used, outcome quality, and lessons
 learned.  This memory allows Pinocchio to recall specific past experiences
 and apply relevant lessons to new tasks.
+
+Performance: maintains inverted indices by task_type and modality so that
+``search_by_task_type``, ``search_by_modality``, and ``find_similar`` run
+in O(k) instead of O(n) for large memory stores.
 """
 
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +30,37 @@ class EpisodicMemory:
       - Return the *k* most similar episodes to a given query
       - Compute aggregate statistics (avg score, error frequency)
       - Persist to disk for cross-session continuity
+      - O(1) lookup by episode_id via hash index
+      - O(k) search by task_type / modality via inverted indices
     """
 
     def __init__(self, storage_path: str = "data/episodic_memory.json") -> None:
         self._path = Path(storage_path)
         self._episodes: list[EpisodicRecord] = []
+        # ── Inverted indices for fast retrieval ──
+        self._id_index: dict[str, EpisodicRecord] = {}
+        self._task_index: dict[TaskType, list[EpisodicRecord]] = defaultdict(list)
+        self._modality_index: dict[Modality, list[EpisodicRecord]] = defaultdict(list)
         self._load()
+
+    # ------------------------------------------------------------------
+    # Index management
+    # ------------------------------------------------------------------
+
+    def _index_episode(self, ep: EpisodicRecord) -> None:
+        """Add a single episode to all indices."""
+        self._id_index[ep.episode_id] = ep
+        self._task_index[ep.task_type].append(ep)
+        for mod in ep.modalities:
+            self._modality_index[mod].append(ep)
+
+    def _rebuild_indices(self) -> None:
+        """Rebuild all indices from scratch (called after _load)."""
+        self._id_index.clear()
+        self._task_index.clear()
+        self._modality_index.clear()
+        for ep in self._episodes:
+            self._index_episode(ep)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -41,6 +71,7 @@ class EpisodicMemory:
             with open(self._path, "r", encoding="utf-8") as f:
                 raw: list[dict[str, Any]] = json.load(f)
             self._episodes = [EpisodicRecord.from_dict(d) for d in raw]
+        self._rebuild_indices()
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,15 +83,13 @@ class EpisodicMemory:
     # ------------------------------------------------------------------
 
     def add(self, episode: EpisodicRecord) -> None:
-        """Add a new episode to memory and persist."""
+        """Add a new episode to memory, update indices, and persist."""
         self._episodes.append(episode)
+        self._index_episode(episode)
         self.save()
 
     def get(self, episode_id: str) -> EpisodicRecord | None:
-        for ep in self._episodes:
-            if ep.episode_id == episode_id:
-                return ep
-        return None
+        return self._id_index.get(episode_id)
 
     def all(self) -> list[EpisodicRecord]:
         return list(self._episodes)
@@ -74,13 +103,13 @@ class EpisodicMemory:
     # ------------------------------------------------------------------
 
     def search_by_task_type(self, task_type: TaskType, limit: int = 5) -> list[EpisodicRecord]:
-        """Return most recent episodes of a given task type."""
-        matches = [e for e in self._episodes if e.task_type == task_type]
+        """Return most recent episodes of a given task type (index-accelerated)."""
+        matches = self._task_index.get(task_type, [])
         return matches[-limit:]
 
     def search_by_modality(self, modality: Modality, limit: int = 5) -> list[EpisodicRecord]:
-        """Return most recent episodes involving a given modality."""
-        matches = [e for e in self._episodes if modality in e.modalities]
+        """Return most recent episodes involving a given modality (index-accelerated)."""
+        matches = self._modality_index.get(modality, [])
         return matches[-limit:]
 
     def search_by_keyword(self, keyword: str, limit: int = 5) -> list[EpisodicRecord]:
@@ -105,20 +134,38 @@ class EpisodicMemory:
     ) -> list[EpisodicRecord]:
         """Find the most similar past episodes by task type + modality overlap.
 
+        Uses inverted indices to only score *candidate* episodes (those that
+        share at least a task_type or one modality), instead of scanning all.
+
         Similarity heuristic:
           +2 for matching task type
           +1 for each shared modality
         Returns top-k by score, then by recency.
         """
+        # Collect candidates from indices (union of task_type + modality hits)
+        candidate_ids: set[str] = set()
+        for ep in self._task_index.get(task_type, []):
+            candidate_ids.add(ep.episode_id)
+        for mod in modalities:
+            for ep in self._modality_index.get(mod, []):
+                candidate_ids.add(ep.episode_id)
+
+        modality_set = set(modalities)
 
         def _score(ep: EpisodicRecord) -> int:
             s = 0
             if ep.task_type == task_type:
                 s += 2
-            s += len(set(ep.modalities) & set(modalities))
+            s += len(set(ep.modalities) & modality_set)
             return s
 
-        scored = [(ep, _score(ep)) for ep in self._episodes if _score(ep) > 0]
+        scored: list[tuple[EpisodicRecord, int]] = []
+        for eid in candidate_ids:
+            ep = self._id_index[eid]
+            sc = _score(ep)
+            if sc > 0:
+                scored.append((ep, sc))
+
         scored.sort(key=lambda x: (x[1], x[0].timestamp), reverse=True)
         return [ep for ep, _ in scored[:limit]]
 

@@ -1,4 +1,15 @@
-"""Data schemas for the Pinocchio agent system."""
+"""Data schemas for the Pinocchio agent system.
+
+Every structured data object flowing through the cognitive loop is defined
+here as a ``@dataclass``.  This includes:
+
+* **Memory schemas** — ``EpisodicRecord``, ``SemanticEntry``, ``ProceduralEntry``
+* **Cognitive-loop results** — one per phase (Perception → Meta-Reflection)
+* **Communication schemas** — ``UserModel``, ``MultimodalInput``, ``AgentMessage``
+
+All memory schemas provide ``to_dict()`` / ``from_dict()`` round-trip
+serialisation for JSON persistence.
+"""
 
 from __future__ import annotations
 

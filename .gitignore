@@ -1,3 +1,4 @@
+# ── Python bytecode & packaging ──
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -5,11 +6,30 @@ dist/
 build/
 .eggs/
 *.egg
-.pytest_cache/
-.mypy_cache/
+
+# ── Virtual environments ──
 .venv/
 venv/
 env/
+
+# ── Tool caches ──
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Runtime / persistent data ──
 data/
 .env
+
+# ── OS files ──
 .DS_Store
+Thumbs.db
+
+# ── Generated media & demo artifacts ──
+*.mp4
+demo_cache.json
+demo_log*.txt
+demo_assets/
+demo_data/

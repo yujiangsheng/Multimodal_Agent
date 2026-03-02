@@ -3,11 +3,14 @@
 Represents abstracted knowledge extracted from multiple episodic experiences:
 domain heuristics, cross-modal reasoning patterns, user preference models,
 and effective strategy templates.
+
+Performance: maintains a domain index for O(k) retrieval.
 """
 
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +28,8 @@ class SemanticMemory:
       - Merge duplicate knowledge entries
       - Trigger knowledge synthesis when episode threshold is reached
       - Persist to disk for cross-session continuity
+      - O(1) lookup by entry_id via hash index
+      - O(k) search by domain via inverted index
     """
 
     SYNTHESIS_THRESHOLD = 10  # episodes per domain before synthesis
@@ -32,7 +37,24 @@ class SemanticMemory:
     def __init__(self, storage_path: str = "data/semantic_memory.json") -> None:
         self._path = Path(storage_path)
         self._entries: list[SemanticEntry] = []
+        # ── Indices ──
+        self._id_index: dict[str, SemanticEntry] = {}
+        self._domain_index: dict[str, list[SemanticEntry]] = defaultdict(list)
         self._load()
+
+    # ------------------------------------------------------------------
+    # Index management
+    # ------------------------------------------------------------------
+
+    def _index_entry(self, entry: SemanticEntry) -> None:
+        self._id_index[entry.entry_id] = entry
+        self._domain_index[entry.domain.lower()].append(entry)
+
+    def _rebuild_indices(self) -> None:
+        self._id_index.clear()
+        self._domain_index.clear()
+        for e in self._entries:
+            self._index_entry(e)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -43,6 +65,7 @@ class SemanticMemory:
             with open(self._path, "r", encoding="utf-8") as f:
                 raw: list[dict[str, Any]] = json.load(f)
             self._entries = [SemanticEntry.from_dict(d) for d in raw]
+        self._rebuild_indices()
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,13 +78,11 @@ class SemanticMemory:
 
     def add(self, entry: SemanticEntry) -> None:
         self._entries.append(entry)
+        self._index_entry(entry)
         self.save()
 
     def get(self, entry_id: str) -> SemanticEntry | None:
-        for e in self._entries:
-            if e.entry_id == entry_id:
-                return e
-        return None
+        return self._id_index.get(entry_id)
 
     def all(self) -> list[SemanticEntry]:
         return list(self._entries)
@@ -75,9 +96,20 @@ class SemanticMemory:
     # ------------------------------------------------------------------
 
     def search_by_domain(self, domain: str, limit: int = 10) -> list[SemanticEntry]:
-        """Return entries matching a domain (case-insensitive substring)."""
+        """Return entries matching a domain (case-insensitive, substring match).
+
+        Uses the domain index to collect candidates whose domain key contains
+        the query as a substring, giving O(D) over distinct domains rather
+        than O(N) over all entries when many entries share a domain.
+        """
         domain_lower = domain.lower()
-        return [e for e in self._entries if domain_lower in e.domain.lower()][:limit]
+        results: list[SemanticEntry] = []
+        for key, entries in self._domain_index.items():
+            if domain_lower in key:
+                results.extend(entries)
+                if len(results) >= limit:
+                    return results[:limit]
+        return results[:limit]
 
     def search_by_keyword(self, keyword: str, limit: int = 10) -> list[SemanticEntry]:
         keyword_lower = keyword.lower()

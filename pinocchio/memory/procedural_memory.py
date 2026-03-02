@@ -3,11 +3,16 @@
 Stores refined procedures that can be recalled and executed for recurring
 task types, including multi-step reasoning chains, tool-use protocols,
 error recovery procedures, and modality-specific processing pipelines.
+
+Performance: maintains an inverted index by task_type so that
+``find_by_task_type`` and ``best_procedure`` run in O(k log k) instead
+of O(n).
 """
 
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,12 +31,31 @@ class ProceduralMemory:
       - Refine procedures based on evaluation feedback
       - Rank procedures by effectiveness
       - Persist to disk for cross-session continuity
+      - O(1) lookup by entry_id via hash index
+      - O(k log k) search by task_type via inverted index
     """
 
     def __init__(self, storage_path: str = "data/procedural_memory.json") -> None:
         self._path = Path(storage_path)
         self._entries: list[ProceduralEntry] = []
+        # ── Indices ──
+        self._id_index: dict[str, ProceduralEntry] = {}
+        self._task_index: dict[TaskType, list[ProceduralEntry]] = defaultdict(list)
         self._load()
+
+    # ------------------------------------------------------------------
+    # Index management
+    # ------------------------------------------------------------------
+
+    def _index_entry(self, entry: ProceduralEntry) -> None:
+        self._id_index[entry.entry_id] = entry
+        self._task_index[entry.task_type].append(entry)
+
+    def _rebuild_indices(self) -> None:
+        self._id_index.clear()
+        self._task_index.clear()
+        for e in self._entries:
+            self._index_entry(e)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -42,6 +66,7 @@ class ProceduralMemory:
             with open(self._path, "r", encoding="utf-8") as f:
                 raw: list[dict[str, Any]] = json.load(f)
             self._entries = [ProceduralEntry.from_dict(d) for d in raw]
+        self._rebuild_indices()
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,13 +79,11 @@ class ProceduralMemory:
 
     def add(self, entry: ProceduralEntry) -> None:
         self._entries.append(entry)
+        self._index_entry(entry)
         self.save()
 
     def get(self, entry_id: str) -> ProceduralEntry | None:
-        for e in self._entries:
-            if e.entry_id == entry_id:
-                return e
-        return None
+        return self._id_index.get(entry_id)
 
     def all(self) -> list[ProceduralEntry]:
         return list(self._entries)
@@ -74,8 +97,8 @@ class ProceduralMemory:
     # ------------------------------------------------------------------
 
     def find_by_task_type(self, task_type: TaskType) -> list[ProceduralEntry]:
-        """Return all procedures for a given task type, ranked by success rate."""
-        matches = [e for e in self._entries if e.task_type == task_type]
+        """Return all procedures for a given task type, ranked by success rate (index-accelerated)."""
+        matches = list(self._task_index.get(task_type, []))
         matches.sort(key=lambda e: e.success_rate, reverse=True)
         return matches
 
