@@ -4,7 +4,7 @@ Supports OpenAI-compatible APIs (Ollama, DashScope / Qwen, OpenAI, Azure,
 vLLM, etc.) with structured retry, token counting, and multimodal
 message construction.
 
-Default backend: Qwen2.5-Omni via local Ollama server.
+Default backend: Qwen3-VL via local Ollama server.
 
 Performance features:
 - HTTP connection pooling via httpx (reuses TCP connections)
@@ -19,13 +19,17 @@ import asyncio
 import base64
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import httpx
 import openai
 
-_DEFAULT_MODEL = os.getenv("PINOCCHIO_MODEL", "qwen2.5-omni")
+# Regex to strip Qwen3 thinking tags from responses
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+_DEFAULT_MODEL = os.getenv("PINOCCHIO_MODEL", "qwen3-vl:4b")
 _DEFAULT_BASE_URL = os.getenv(
     "OPENAI_BASE_URL",
     "http://localhost:11434/v1",
@@ -35,9 +39,9 @@ _DEFAULT_BASE_URL = os.getenv(
 class LLMClient:
     """Thin wrapper around an OpenAI-compatible chat completions API.
 
-    The default configuration targets **qwen2.5-omni** running on a
-    local Ollama server.  Qwen2.5-Omni is a *native* omni-modal
-    model that supports text, image, audio, and video inputs in a
+    The default configuration targets **qwen3-vl:4b** running on a
+    local Ollama server.  Qwen3-VL is a *native* multimodal
+    model that supports text, image, and video inputs in a
     single model -- no separate transcription step needed.
 
     Skills / Capabilities:
@@ -55,19 +59,22 @@ class LLMClient:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 16384,
-        timeout: float = 600.0,
+        timeout: float = 120.0,
         max_retries: int = 2,
+        num_ctx: int = 8192,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.num_ctx = num_ctx
+        self._is_qwen3 = "qwen3" in model.lower()
 
         resolved_key = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
         resolved_url = base_url or _DEFAULT_BASE_URL
 
         # Pooled HTTP client — reuses TCP connections across threads
         http_client = httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=30.0),
+            timeout=httpx.Timeout(timeout, connect=10.0),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -107,6 +114,8 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
+            # Pass num_ctx to Ollama to limit KV cache allocation
+            "extra_body": {"options": {"num_ctx": self.num_ctx}},
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
@@ -116,6 +125,8 @@ class LLMClient:
             response = self._client.chat.completions.create(**kwargs)
             choice = response.choices[0]
             content = choice.message.content or ""
+            # Strip Qwen3 <think>...</think> blocks — they waste output tokens
+            content = _THINK_RE.sub("", content)
             self._last_finish_reason = getattr(choice, "finish_reason", None) or "stop"
             text = content.strip()
             if text or attempt >= 2:
@@ -143,7 +154,14 @@ class LLMClient:
         return self.chat(messages, **kwargs)
 
     def ask_json(self, system: str, user: str, **kwargs: Any) -> dict[str, Any]:
-        """Call the LLM and parse the response as JSON."""
+        """Call the LLM and parse the response as JSON.
+
+        For Qwen3 models, prepends /no_think to skip the internal reasoning
+        phase — JSON classification calls don't need chain-of-thought.
+        """
+        # Disable Qwen3 thinking mode for JSON calls — saves significant time
+        if self._is_qwen3:
+            user = "/no_think\n" + user
         raw = self.ask(system, user, json_mode=True, **kwargs)
         try:
             return json.loads(raw)
@@ -160,7 +178,7 @@ class LLMClient:
                 return {}
 
     # ------------------------------------------------------------------
-    # Multimodal message builders (Qwen2.5-Omni compatible)
+    # Multimodal message builders (Qwen3-VL compatible)
     # ------------------------------------------------------------------
 
     def build_vision_message(self, text: str, image_urls: list[str]) -> dict[str, Any]:
@@ -178,7 +196,7 @@ class LLMClient:
     def build_audio_message(self, text: str, audio_urls: list[str]) -> dict[str, Any]:
         """Construct a multimodal user message with text + audio.
 
-        Qwen2.5-Omni supports ``input_audio`` content parts natively,
+        Qwen3-VL supports ``input_audio`` content parts natively,
         so we can send audio directly without a separate transcription call.
         Local file paths are converted to base64 data URIs.
         """
@@ -198,7 +216,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Construct a multimodal user message with text + video.
 
-        Qwen2.5-Omni accepts ``video`` content parts directly.  For local
+        Qwen3-VL accepts ``video`` content parts directly.  For local
         files the caller should ensure the file is accessible; remote URLs
         are passed through.
         """
@@ -250,7 +268,7 @@ class AsyncLLMClient:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 16384,
-        timeout: float = 600.0,
+        timeout: float = 120.0,
         max_retries: int = 2,
     ) -> None:
         self.model = model
@@ -261,7 +279,7 @@ class AsyncLLMClient:
         resolved_url = base_url or _DEFAULT_BASE_URL
 
         http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=30.0),
+            timeout=httpx.Timeout(timeout, connect=10.0),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -299,6 +317,7 @@ class AsyncLLMClient:
 
         response = await self._client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content or ""
+        content = _THINK_RE.sub("", content)
         return content.strip()
 
     async def ask(self, system: str, user: str, **kwargs: Any) -> str:

@@ -89,7 +89,7 @@ class Pinocchio:
 
     def __init__(
         self,
-        model: str = "qwen2.5-omni",
+        model: str = "qwen3-vl:4b",
         api_key: str | None = None,
         base_url: str | None = None,
         data_dir: str = "data",
@@ -97,9 +97,10 @@ class Pinocchio:
         max_workers: int | None = None,
         parallel_modalities: bool = True,
         meta_reflect_interval: int = 5,
+        num_ctx: int = 8192,
     ) -> None:
         # Shared infrastructure
-        self.llm = LLMClient(model=model, api_key=api_key, base_url=base_url)
+        self.llm = LLMClient(model=model, api_key=api_key, base_url=base_url, num_ctx=num_ctx)
         self.memory = MemoryManager(data_dir=data_dir)
         self.logger = PinocchioLogger()
 
@@ -132,6 +133,7 @@ class Pinocchio:
         self._interaction_count = 0
         self._verbose = verbose
         self._lock = threading.Lock()  # protects session state mutations
+        self._post_response_thread: threading.Thread | None = None
 
         # Log detected hardware
         if verbose:
@@ -267,7 +269,61 @@ class Pinocchio:
     # Internal: Cognitive Loop
     # ------------------------------------------------------------------
 
-    MAX_COMPLETION_RETRIES = 3  # max continuation attempts for incomplete responses
+    MAX_COMPLETION_RETRIES = 1  # reduced from 3 for faster response
+
+    # Simple-input threshold: text-only, short messages skip heavy phases
+    FAST_PATH_MAX_LENGTH = 500
+
+    @staticmethod
+    def _is_simple_input(user_input: MultimodalInput) -> bool:
+        """Heuristic: text-only short messages don't need full cognitive loop."""
+        if user_input.image_paths or user_input.audio_paths or user_input.video_paths:
+            return False
+        text = (user_input.text or "").strip()
+        if not text or len(text) > Pinocchio.FAST_PATH_MAX_LENGTH:
+            return False
+        return True
+
+    def _run_fast_path(self, user_input: MultimodalInput) -> AgentMessage:
+        """Fast path: single LLM call for simple text-only inputs.
+
+        Skips PERCEIVE, STRATEGIZE, EVALUATE — goes directly to the LLM
+        with conversational context from working memory.  Roughly as fast
+        as a raw Ollama call.
+        """
+        self.logger.log(AgentRole.ORCHESTRATOR, "Fast path — direct execution")
+
+        user_text = user_input.text or ""
+
+        # Build minimal context from working memory (recent conversation)
+        conv_items = self.memory.working.get_conversation()[-6:]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": (
+                "You are Pinocchio, a helpful multimodal AI assistant that learns "
+                "and evolves. Respond directly to the user. Be thorough, accurate, "
+                "and helpful. Write in the same language the user uses."
+            )},
+        ]
+        for item in conv_items:
+            messages.append({"role": item.source, "content": item.content})
+        messages.append({"role": "user", "content": user_text})
+
+        response_text = self.llm.chat(messages)
+
+        # Store in working memory
+        self.memory.working.add_conversation_turn("assistant", response_text[:500])
+
+        self.logger.log(
+            AgentRole.ORCHESTRATOR,
+            f"Fast path complete — {len(response_text)} chars",
+        )
+
+        return AgentMessage(
+            role="assistant",
+            content=response_text,
+            confidence=0.8,
+            metadata={"fast_path": True},
+        )
 
     def _run_cognitive_loop(self, user_input: MultimodalInput) -> AgentMessage:
         """Execute the full PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN pipeline.
@@ -283,6 +339,10 @@ class Pinocchio:
         # Working memory gives downstream agents conversational context
         if user_input.text:
             self.memory.working.add_conversation_turn("user", user_input.text)
+
+        # ── Fast path: simple text-only input → single LLM call ──
+        if self._is_simple_input(user_input):
+            return self._run_fast_path(user_input)
 
         # ── Phase 0.5: PREPROCESS MODALITIES (parallel or sequential) ──
         # Non-text modalities (images/audio/video) are converted to text
@@ -363,43 +423,12 @@ class Pinocchio:
                 f"complete: {evaluation.is_complete}",
             )
 
-        # ── Phase 5: LEARN ──
-        # Extract lessons, store episode, update semantic & procedural memory,
-        # and flag domains for knowledge synthesis when threshold is reached
+        # ── Phase 5+6: LEARN & META-REFLECT (deferred to background) ──
+        # These phases update memory but don't affect the current response.
+        # Running them in a background thread lets us return the response
+        # immediately after evaluation, saving 2-3 LLM call latencies.
         user_text = user_input.text or "(non-text input)"
-        learning = self.learning.run(
-            user_input_text=user_text,
-            perception=perception,
-            strategy=strategy,
-            evaluation=evaluation,
-        )
-
-        # ── Phase 6: META-REFLECT (periodic — every N interactions) ──
-        # Higher-order self-analysis: detect biases, track improvement trends,
-        # generate evolution plan.  Only fires at the configured interval.
-        if self.meta_reflection.should_trigger():
-            self.logger.log(
-                AgentRole.ORCHESTRATOR,
-                "Meta-reflection triggered — running higher-order analysis",
-            )
-            meta = self.meta_reflection.run()
-            # Log key insights
-            if meta.priority_improvements:
-                self.logger.log(
-                    AgentRole.ORCHESTRATOR,
-                    f"Top improvement priorities: {meta.priority_improvements[:3]}",
-                )
-
-        # ── Periodic consolidation (temporal-axis promotion) ──
-        # Every 10 interactions, promote high-value long-term memories
-        # to persistent tier so they are never pruned.
-        if self._interaction_count % 10 == 0 and self._interaction_count > 0:
-            promoted = self.memory.consolidate()
-            if any(v > 0 for v in promoted.values()):
-                self.logger.log(
-                    AgentRole.ORCHESTRATOR,
-                    f"Memory consolidation: {promoted}",
-                )
+        self._defer_post_response(user_text, perception, strategy, evaluation)
 
         # Store assistant response in working memory
         self.memory.working.add_conversation_turn(
@@ -414,6 +443,62 @@ class Pinocchio:
         )
 
         return response
+
+    # ------------------------------------------------------------------
+    # Internal: Deferred post-response work (background thread)
+    # ------------------------------------------------------------------
+
+    def _defer_post_response(
+        self,
+        user_text: str,
+        perception: Any,
+        strategy: Any,
+        evaluation: Any,
+    ) -> None:
+        """Run LEARN + META-REFLECT + consolidation in a background thread."""
+
+        def _background() -> None:
+            try:
+                # Phase 5: LEARN
+                self.learning.run(
+                    user_input_text=user_text,
+                    perception=perception,
+                    strategy=strategy,
+                    evaluation=evaluation,
+                )
+
+                # Phase 6: META-REFLECT (periodic)
+                if self.meta_reflection.should_trigger():
+                    self.logger.log(
+                        AgentRole.ORCHESTRATOR,
+                        "Meta-reflection triggered — running higher-order analysis",
+                    )
+                    meta = self.meta_reflection.run()
+                    if meta.priority_improvements:
+                        self.logger.log(
+                            AgentRole.ORCHESTRATOR,
+                            f"Top improvement priorities: {meta.priority_improvements[:3]}",
+                        )
+
+                # Periodic consolidation
+                if self._interaction_count % 10 == 0 and self._interaction_count > 0:
+                    promoted = self.memory.consolidate()
+                    if any(v > 0 for v in promoted.values()):
+                        self.logger.log(
+                            AgentRole.ORCHESTRATOR,
+                            f"Memory consolidation: {promoted}",
+                        )
+            except Exception as exc:
+                self.logger.error(
+                    AgentRole.ORCHESTRATOR,
+                    f"Background post-response error: {exc}",
+                )
+
+        thread = threading.Thread(
+            target=_background, name="pinocchio-post-response", daemon=True
+        )
+        self._post_response_thread = thread
+        thread.start()
 
     # ------------------------------------------------------------------
     # Internal: Parallel Modality Preprocessing

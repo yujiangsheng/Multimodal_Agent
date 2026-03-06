@@ -108,7 +108,7 @@ class StrategyAgent(BaseAgent):
             f"{lessons_context}"
         )
 
-        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=user_prompt)
+        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=user_prompt, max_tokens=2048)
 
         try:
             fusion = FusionStrategy(llm_result.get("fusion_strategy", "late_fusion"))

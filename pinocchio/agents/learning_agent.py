@@ -105,7 +105,7 @@ class LearningAgent(BaseAgent):
             f"Surprises: {evaluation.surprises}\n"
         )
 
-        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=learn_prompt)
+        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=learn_prompt, max_tokens=2048)
 
         # --- 1. Build episodic record ---
         episode = EpisodicRecord(

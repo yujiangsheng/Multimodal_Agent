@@ -92,7 +92,7 @@ Write in the same language the user uses.
 """
 
 # Maximum number of auto-continuation rounds when finish_reason="length"
-_MAX_AUTO_CONTINUATIONS = 5
+_MAX_AUTO_CONTINUATIONS = 2
 
 # Terminal punctuation set for sentence-completeness check
 _TERMINAL_CHARS = set(

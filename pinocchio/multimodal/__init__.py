@@ -1,7 +1,7 @@
 """Pinocchio multimodal processor modules.
 
 Each processor handles one input modality and delegates to the LLM
-(Qwen2.5-Omni) for understanding:
+(Qwen3-VL) for understanding:
 
 * :class:`TextProcessor`   — text understanding, generation, translation
 * :class:`VisionProcessor` — image understanding, VQA, OCR, captioning

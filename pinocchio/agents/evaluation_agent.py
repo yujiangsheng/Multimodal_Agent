@@ -180,7 +180,7 @@ class EvaluationAgent(BaseAgent):
                 f"Pay extra attention to whether the response is complete."
             )
 
-        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=eval_prompt)
+        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=eval_prompt, max_tokens=2048)
 
         def _safe_int(val: Any, default: int, lo: int = 1, hi: int = 10) -> int:
             """Parse an int from LLM output, clamping to [lo, hi]."""

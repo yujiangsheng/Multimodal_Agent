@@ -1,6 +1,6 @@
 """VideoProcessor -- sub-agent for video modality processing.
 
-Handles video understanding via **Qwen2.5-Omni** which natively
+Handles video understanding via **Qwen3-VL** which natively
 accepts video input -- no manual ffmpeg frame extraction or separate
 audio transcription step is required.
 
@@ -11,7 +11,7 @@ endpoint does not support direct video ingestion.
 Skills / Capabilities
 ---------------------
 1. **Native Video Understanding**
-   Send video directly to Qwen2.5-Omni for end-to-end analysis of
+   Send video directly to Qwen3-VL for end-to-end analysis of
    both visual and audio streams in a single call.
 
 2. **Key-Frame Extraction (fallback)**
@@ -55,9 +55,9 @@ _SYSTEM_PROMPT = (
 
 
 class VideoProcessor(BaseAgent):
-    """Processes video-modality tasks, preferring native Qwen2.5-Omni video input.
+    """Processes video-modality tasks, preferring native Qwen3-VL video input.
 
-    Primary path:  send video directly to Qwen2.5-Omni via ``build_video_message``.
+    Primary path:  send video directly to Qwen3-VL via ``build_video_message``.
     Fallback path: extract frames + audio via ffmpeg and delegate to
                    VisionProcessor / AudioProcessor.
     """
@@ -133,7 +133,7 @@ class VideoProcessor(BaseAgent):
         video_paths : Paths to video files.
         vision_processor : A VisionProcessor instance for frame analysis (fallback).
         audio_processor : An AudioProcessor instance for audio analysis (fallback).
-        native_video : If True (default), send video directly to Qwen2.5-Omni.
+        native_video : If True (default), send video directly to Qwen3-VL.
                        Set to False to force the ffmpeg fallback path.
         """
         self._log(f"Video task: {task} -- {len(video_paths)} file(s)")
@@ -143,15 +143,15 @@ class VideoProcessor(BaseAgent):
         return self._run_fallback(task, video_paths, vision_processor, audio_processor)
 
     # ------------------------------------------------------------------
-    # Primary path -- native Qwen2.5-Omni video understanding
+    # Primary path -- native Qwen3-VL video understanding
     # ------------------------------------------------------------------
 
     def _run_native(self, task: str, video_paths: list[str]) -> str:
-        """Send video directly to Qwen2.5-Omni via ``build_video_message``.
+        """Send video directly to Qwen3-VL via ``build_video_message``.
 
         Multiple videos are processed in parallel threads.
         """
-        self._log("Using native video input (Qwen2.5-Omni)")
+        self._log("Using native video input (Qwen3-VL)")
 
         def _process_one(vp: str) -> str:
             video_msg = self.llm.build_video_message(text=f"Task: {task}", video_urls=[vp])

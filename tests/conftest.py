@@ -67,3 +67,14 @@ def memory_manager(tmp_data_dir):
     """Return a real :class:`MemoryManager` backed by a temp directory."""
     from pinocchio.memory.memory_manager import MemoryManager
     return MemoryManager(data_dir=tmp_data_dir)
+
+
+@pytest.fixture(autouse=True)
+def _disable_fast_path(monkeypatch):
+    """Disable fast path for all tests so the full cognitive loop is exercised.
+
+    Individual tests that need to verify fast-path behaviour can re-enable it
+    by setting ``agent.FAST_PATH_MAX_LENGTH = 500`` in the test body.
+    """
+    from pinocchio.orchestrator import Pinocchio
+    monkeypatch.setattr(Pinocchio, "FAST_PATH_MAX_LENGTH", 0)

@@ -34,3 +34,4 @@ demo_log*.txt
 demo_video_output.log
 demo_assets/
 demo_data/
+prompt.txt

@@ -16,7 +16,7 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 | 特性 | 说明 |
 |------|------|
 | **6 阶段认知循环** | PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT |
-| **多模态原生** | 文本 / 图像 / 音频 / 视频，通过 Qwen2.5-Omni 统一处理 |
+| **多模态原生** | 文本 / 图像 / 音频 / 视频，通过 Qwen3-VL 统一处理 |
 | **双轴记忆系统** | 内容轴（情景 / 语义 / 程序）× 时间轴（工作 / 长期 / 持久），共 9 种记忆组合 |
 | **自我进化** | 从每次交互中提取教训，优化策略，积累可复用的程序模板 |
 | **响应完整性保障** | 自动续写 + 启发式检查 + finish_reason 检测，确保输出不截断 |
@@ -71,8 +71,11 @@ Multimodal_Agent/
 │       ├── resource_monitor.py    # CPU / GPU / RAM 检测
 │       └── parallel_executor.py   # 资源感知并行执行器
 │
-├── scripts/                   # 辅助脚本
-│   └── generate_demo_video.py     # 演示视频生成器（19 场景）
+├── web/                       # Web Demo 前端
+│   ├── app.py                     # FastAPI 后端（REST API + 静态文件）
+│   └── static/
+│       └── index.html             # 单页前端（Chat UI + 多模态上传）
+│
 │
 ├── tests/                     # 测试套件（529 测试）
 │   ├── conftest.py                # 共享 fixtures
@@ -125,9 +128,10 @@ pip install -e ".[dev]"
 # 安装 Ollama（macOS）
 brew install ollama
 
-# 拉取模型（任选其一）
-ollama pull qwen2.5-omni       # 原生多模态，推荐
-ollama pull qwen3-vl:8b        # 轻量视觉模型
+# 拉取模型（按需选择，默认使用 4b）
+ollama pull qwen3-vl:4b        # 轻量快速，默认
+ollama pull qwen3-vl:8b        # 效果更好
+ollama pull qwen3-vl:30B       # 最强多模态，需大显存
 
 # 启动服务（默认监听 localhost:11434）
 ollama serve
@@ -135,9 +139,22 @@ ollama serve
 
 ### 3. 运行
 
+**CLI 模式**
 ```bash
 python main.py
 ```
+
+**Web Demo（推荐）**
+```bash
+# 安装 web 依赖
+pip install -e ".[web]"
+
+# 启动 Web 服务（默认端口 8000）
+python -m web.app
+```
+
+浏览器打开 http://localhost:8000 即可使用多模态 Demo 界面。
+支持文本对话、图片/音频/视频上传、快捷测试场景、实时状态监控。
 
 交互示例：
 
@@ -247,7 +264,7 @@ from pinocchio import Pinocchio
 cfg = PinocchioConfig()
 
 agent = Pinocchio(
-    model=cfg.model,            # 默认: qwen2.5-omni
+    model=cfg.model,            # 默认: qwen3-vl:4b
     api_key=cfg.api_key,        # 默认: ollama
     base_url=cfg.base_url,      # 默认: http://localhost:11434/v1
     data_dir=cfg.data_dir,      # 记忆持久化路径
@@ -261,9 +278,10 @@ agent = Pinocchio(
 ### 环境变量
 
 ```bash
-export PINOCCHIO_MODEL="qwen2.5-omni"
+export PINOCCHIO_MODEL="qwen3-vl:4b"
 export OPENAI_BASE_URL="http://localhost:11434/v1"
 export PINOCCHIO_DATA_DIR="./my_data"
+export PINOCCHIO_NUM_CTX=8192
 export PINOCCHIO_MAX_WORKERS=4
 export PINOCCHIO_PARALLEL=true
 ```
@@ -282,7 +300,7 @@ export PINOCCHIO_PARALLEL=true
                                                    │
                                               ┌────▼──────┐
                                               │ 自动续写   │ ← finish_reason="length"
-                                              │ (最多5轮)  │     时自动循环续写
+                                              │ (最多2轮)  │     时自动循环续写
                                               └────┬──────┘
                                                    │
 用户输出  ◄──  ┌────────────┐  ┌──────────┐  ┌────▼─────┐
@@ -293,14 +311,18 @@ export PINOCCHIO_PARALLEL=true
 
 每个阶段由独立的子智能体执行，通过 Orchestrator 统一调度。所有阶段共享同一个 LLM 实例和双轴记忆系统。
 
+**快速路径优化**：对于纯文本短消息（≤500字），Pinocchio 会自动跳过 PERCEIVE / STRATEGIZE / EVALUATE 阶段，直接通过单次 LLM 调用生成回复，速度与直接调用 Ollama 基本一致。复杂输入（长文本、多模态）仍走完整认知循环。
+
+**后台学习**：Phase 5 (LEARN) 和 Phase 6 (META-REFLECT) 在后台线程中异步执行，不阻塞用户响应返回。
+
 ### 响应完整性保障
 
 Pinocchio 通过四层机制确保输出不会被截断：
 
-1. **执行阶段自动续写** — 当 `finish_reason="length"` 时，自动循环续写最多 5 轮
+1. **执行阶段自动续写** — 当 `finish_reason="length"` 时，自动循环续写最多 2 轮
 2. **句子完整性检查** — 自然停止后检测文本是否以完整句子结尾
 3. **评估阶段双重检测** — 启发式规则 + LLM 评估联合判断完整性
-4. **编排器重试循环** — 评估不通过则触发最多 3 次外层重试
+4. **编排器重试循环** — 评估不通过则触发最多 1 次外层重试
 
 ### 双轴记忆系统
 
@@ -339,7 +361,7 @@ Pinocchio 通过四层机制确保输出不会被截断：
 - **并行模式**：多线程并发处理各模态（`ThreadPoolExecutor`）
 - **顺序回退**：单核环境自动降级为顺序处理
 - **融合策略**：`early_fusion` / `late_fusion` / `hybrid_fusion`
-- **视频处理**：优先原生 Qwen2.5-Omni 视频输入，回退至 ffmpeg 抽帧 + 分析
+- **视频处理**：优先原生 Qwen3-VL 视频输入，回退至 ffmpeg 抽帧 + 分析
 
 ---
 
@@ -367,13 +389,14 @@ pytest tests/test_agents.py -v
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 |------|------|--------|----------|------|
-| `model` | `str` | `qwen2.5-omni` | `PINOCCHIO_MODEL` | LLM 模型名称 |
+| `model` | `str` | `qwen3-vl:4b` | `PINOCCHIO_MODEL` | LLM 模型名称 |
 | `api_key` | `str` | `ollama` | `OLLAMA_API_KEY` | API 密钥 |
 | `base_url` | `str` | `http://localhost:11434/v1` | `OPENAI_BASE_URL` | API 基础 URL |
 | `temperature` | `float` | `0.7` | — | 生成温度 |
 | `max_tokens` | `int` | `16384` | — | 最大生成 tokens |
-| `timeout` | `float` | `600.0` | — | LLM 请求超时（秒） |
+| `timeout` | `float` | `120.0` | — | LLM 请求超时（秒） |
 | `data_dir` | `str` | `data` | `PINOCCHIO_DATA_DIR` | 记忆持久化目录 |
+| `num_ctx` | `int` | `8192` | `PINOCCHIO_NUM_CTX` | Ollama 上下文窗口（越小越快） |
 | `meta_reflect_interval` | `int` | `5` | — | 元反思触发间隔 |
 | `max_workers` | `int\|None` | auto | `PINOCCHIO_MAX_WORKERS` | 最大并行线程数 |
 | `parallel_modalities` | `bool` | `True` | `PINOCCHIO_PARALLEL` | 并行处理多模态 |

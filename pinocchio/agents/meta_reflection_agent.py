@@ -115,7 +115,7 @@ class MetaReflectionAgent(BaseAgent):
             + "\n".join(f"  - {l}" for l in recent_lessons)
         )
 
-        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=context)
+        llm_result = self.llm.ask_json(system=_SYSTEM_PROMPT, user=context, max_tokens=2048)
 
         result = MetaReflectionResult(
             recurring_errors=llm_result.get("recurring_errors", []),

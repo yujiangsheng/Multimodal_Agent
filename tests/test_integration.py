@@ -98,6 +98,18 @@ class TestPinocchioIntegration:
         agent.llm.build_vision_message = MagicMock(return_value={"role": "user", "content": []})
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _chat_and_wait(agent, *args, **kwargs):
+        """Call agent.chat() then wait for the background learning thread."""
+        result = agent.chat(*args, **kwargs)
+        if agent._post_response_thread is not None:
+            agent._post_response_thread.join(timeout=5)
+        return result
+
+    # ------------------------------------------------------------------
     # Tests
     # ------------------------------------------------------------------
 
@@ -108,7 +120,7 @@ class TestPinocchioIntegration:
 
     def test_single_text_interaction(self, agent):
         self._setup_llm_responses(agent)
-        response = agent.chat("How fast does light travel?")
+        response = self._chat_and_wait(agent, "How fast does light travel?")
 
         assert response  # non-empty
         assert "299,792,458" in response or "3×10" in response
@@ -130,18 +142,18 @@ class TestPinocchioIntegration:
 
     def test_multiple_interactions_accumulate_memory(self, agent):
         self._setup_llm_responses(agent)
-        agent.chat("Question 1")
+        self._chat_and_wait(agent, "Question 1")
 
         # Reset call count for second interaction
         self._setup_llm_responses(agent)
-        agent.chat("Question 2")
+        self._chat_and_wait(agent, "Question 2")
 
         assert agent._interaction_count == 2
         assert agent.memory.episodic.count == 2
 
     def test_learning_stores_semantic_and_procedural(self, agent):
         self._setup_llm_responses(agent)
-        agent.chat("Explain quantum mechanics")
+        self._chat_and_wait(agent, "Explain quantum mechanics")
 
         # Learning phase stores semantic knowledge and procedure
         assert agent.memory.semantic.count >= 1
@@ -153,7 +165,7 @@ class TestPinocchioIntegration:
         """After 5 interactions, meta-reflection should trigger."""
         for i in range(5):
             self._setup_llm_responses(agent)
-            agent.chat(f"Question {i+1}")
+            self._chat_and_wait(agent, f"Question {i+1}")
 
         assert agent._interaction_count == 5
         # 5 episodes stored = triggers meta-reflection
@@ -161,7 +173,7 @@ class TestPinocchioIntegration:
 
     def test_status_returns_valid_summary(self, agent):
         self._setup_llm_responses(agent)
-        agent.chat("test")
+        self._chat_and_wait(agent, "test")
 
         status = agent.status()
         assert status["interaction_count"] == 1
@@ -172,7 +184,7 @@ class TestPinocchioIntegration:
 
     def test_reset_clears_session_keeps_memory(self, agent):
         self._setup_llm_responses(agent)
-        agent.chat("test")
+        self._chat_and_wait(agent, "test")
         assert agent._interaction_count == 1
         assert len(agent.conversation_history) == 2
         stored_episodes = agent.memory.episodic.count

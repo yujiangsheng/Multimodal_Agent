@@ -21,7 +21,7 @@ Multimodal input:
         分析这个视频 --video lecture.mp4
 
 Optional environment variables:
-    PINOCCHIO_MODEL       — LLM model name (default: qwen2.5-omni)
+    PINOCCHIO_MODEL       — LLM model name (default: qwen3-vl:4b)
     OPENAI_BASE_URL       — Custom API base URL (default: http://localhost:11434/v1)
     PINOCCHIO_DATA_DIR    — Directory for persistent memory (default: data)
 """
@@ -66,6 +66,7 @@ def main() -> None:
         max_workers=cfg.max_workers,
         parallel_modalities=cfg.parallel_modalities,
         meta_reflect_interval=cfg.meta_reflect_interval,
+        num_ctx=cfg.num_ctx,
     )
 
     print(agent.greet())

@@ -368,12 +368,12 @@ Then begin the PERCEIVE phase for the user's first message.
 配合结构化 JSON 文件存储，实现三层记忆的持久化。
 
 ### 当前技术栈
-- **LLM**: Qwen2.5-Omni（通过本地 Ollama 服务，OpenAI 兼容 API，max_tokens=16384）
+- **LLM**: Qwen3-VL:4b（通过本地 Ollama 服务，OpenAI 兼容 API，max_tokens=16384）；可通过 `PINOCCHIO_MODEL` 切换为 8b/30B
 - **记忆存储**: 双轴记忆 — JSON 文件 + 倒排索引（无需外部数据库）
-- **编排框架**: 自研 Orchestrator（`pinocchio/orchestrator.py`）+ 最多 3 次完整性重试
-- **多模态处理**: Qwen2.5-Omni 原生多模态输入（文本 / 图像 / 音频 / 视频）
+- **编排框架**: 自研 Orchestrator（`pinocchio/orchestrator.py`）+ 快速路径（纯文本短消息 1 次 LLM 调用）+ 完整认知循环（复杂/多模态输入）
+- **多模态处理**: Qwen3-VL 原生多模态输入（文本 / 图像 / 音频 / 视频）
 - **并行处理**: `ThreadPoolExecutor` + `ResourceMonitor` 硬件感知调度
-- **响应保障**: 自动续写（最多 5 轮）+ 启发式完整性检查 + LLM 评估
+- **响应保障**: 自动续写（最多 2 轮）+ 启发式完整性检查 + LLM 评估
 
 ### 兼容的替代方案
 - **LLM**: 任何 OpenAI 兼容 API（GPT-4o、Claude、Gemini、vLLM 等）

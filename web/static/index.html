@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pinocchio — 多模态自我进化智能体</title>
+<style>
+:root {
+  --bg: #0f0f17;
+  --bg2: #161622;
+  --surface: #1c1c2e;
+  --surface2: #252540;
+  --border: #2a2a45;
+  --border2: #35355a;
+  --text: #e2e4f0;
+  --text2: #9496b0;
+  --dim: #5c5e78;
+  --accent: #7c6ff7;
+  --accent2: #9d8dff;
+  --green: #4ade80;
+  --green2: #22c55e;
+  --red: #f87171;
+  --yellow: #fbbf24;
+  --blue: #60a5fa;
+  --cyan: #22d3ee;
+  --orange: #fb923c;
+  --radius: 16px;
+  --radius-s: 10px;
+  --radius-xs: 6px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Noto Sans SC", "PingFang SC", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ═══ Layout ═══════════════════════════════════════════════ */
+.app {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: 56px 1fr;
+  height: 100vh;
+}
+
+/* ─── Top bar ───────────────────────────────────────────── */
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.logo {
+  font-size: 22px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.llm-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--green);
+}
+.llm-dot {
+  width: 6px; height: 6px;
+  background: var(--green);
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.topbar-right { display: flex; gap: 8px; }
+.top-btn {
+  padding: 5px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all .15s;
+}
+.top-btn:hover { background: var(--surface2); color: var(--text); }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 24px;
+}
+.tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all .15s;
+}
+.tab:hover { color: var(--text2); }
+.tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+/* ─── Chat pane ─────────────────────────────────────────── */
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.messages::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.msg {
+  max-width: 78%;
+  padding: 10px 14px;
+  border-radius: var(--radius-s);
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.msg-agent {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.msg-system {
+  align-self: center;
+  color: var(--dim);
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+/* Attachments */
+.msg-att {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.att-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.att-pill img {
+  max-width: 80px;
+  max-height: 56px;
+  border-radius: 3px;
+}
+
+/* Typing dots */
+.typing { padding: 10px 14px; }
+.typing span {
+  display: inline-block;
+  width: 7px; height: 7px;
+  background: var(--dim);
+  border-radius: 50%;
+  margin-right: 3px;
+  animation: bounce 1.4s ease-in-out infinite;
+}
+.typing span:nth-child(2) { animation-delay: .15s; }
+.typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes bounce {
+  0%,80%,100% { transform: translateY(0); }
+  40% { transform: translateY(-6px); }
+}
+
+/* ─── Input bar ─────────────────────────────────────────── */
+.input-area {
+  padding: 14px 24px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.file-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.file-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  color: var(--text2);
+}
+.file-pill .rm { cursor: pointer; color: var(--red); font-weight: 700; }
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.input-row textarea {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  padding: 9px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: none;
+  min-height: 40px;
+  max-height: 140px;
+  line-height: 1.5;
+}
+.input-row textarea:focus { outline: none; border-color: var(--accent); }
+.input-row textarea::placeholder { color: var(--dim); }
+
+.attach-group { display: flex; gap: 3px; }
+.att-btn {
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 16px;
+  transition: all .12s;
+}
+.att-btn:hover { border-color: var(--accent); color: var(--text); }
+.att-btn input[type="file"] { display: none; }
+.send-btn {
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-xs);
+  color: #fff;
+  cursor: pointer;
+  font-size: 17px;
+  transition: opacity .12s;
+}
+.send-btn:hover { opacity: .85; }
+.send-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ═══ Right panel ═════════════════════════════════════════ */
+.right-panel {
+  overflow-y: auto;
+  background: var(--bg2);
+  padding: 0;
+}
+.right-panel::-webkit-scrollbar { width: 4px; }
+.right-panel::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Panel content — each tab */
+.panel-view { display: none; padding: 16px; }
+.panel-view.active { display: block; }
+
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.card h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent2);
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  margin-bottom: 10px;
+}
+.kv {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.kv .k { color: var(--text2); }
+.kv .v { color: var(--text); font-weight: 500; }
+.kv .v.g { color: var(--green); }
+.kv .v.y { color: var(--yellow); }
+.kv .v.r { color: var(--red); }
+
+/* Sparkline / Score chart */
+.chart-wrap {
+  width: 100%;
+  height: 120px;
+  position: relative;
+  margin-top: 8px;
+}
+.chart-wrap canvas { width: 100%; height: 100%; }
+
+/* Memory list */
+.mem-list { display: flex; flex-direction: column; gap: 8px; }
+.mem-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  cursor: pointer;
+  transition: border-color .12s;
+}
+.mem-item:hover { border-color: var(--accent); }
+.mem-item .mi-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.mem-item .mi-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 12px;
+}
+.mi-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.tag-ep { background: rgba(96,165,250,.15); color: var(--blue); }
+.tag-sem { background: rgba(34,211,238,.15); color: var(--cyan); }
+.tag-proc { background: rgba(251,191,36,.15); color: var(--yellow); }
+.tag-persistent { background: rgba(74,222,128,.15); color: var(--green); }
+.tag-long_term { background: rgba(156,163,175,.12); color: var(--text2); }
+.tag-working { background: rgba(251,146,60,.12); color: var(--orange); }
+
+.mi-body { color: var(--text2); }
+.mi-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+}
+.mi-lessons {
+  margin-top: 4px;
+  padding-left: 14px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.mi-lessons li { margin-bottom: 2px; }
+.mi-meta {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.mi-steps {
+  margin-top: 4px;
+  counter-reset: step;
+  padding-left: 0;
+  list-style: none;
+}
+.mi-steps li {
+  counter-increment: step;
+  margin-bottom: 2px;
+  color: var(--text2);
+  font-size: 11px;
+}
+.mi-steps li::before {
+  content: counter(step);
+  display: inline-flex;
+  width: 16px; height: 16px;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2);
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent2);
+  margin-right: 6px;
+}
+
+/* Empty state */
+.empty {
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+  padding: 30px 0;
+}
+
+/* ─── Responsive ────────────────────────────────────────── */
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  .right-panel { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="logo">Pinocchio</span>
+      <div class="llm-badge"><span class="llm-dot"></span><span id="llmLabel">LLM 就绪</span></div>
+      <div class="tabs">
+        <button class="tab active" data-tab="overview">总览</button>
+        <button class="tab" data-tab="memory">记忆</button>
+        <button class="tab" data-tab="evolution">进化</button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="top-btn" id="btnReset">重置会话</button>
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat-pane">
+    <div class="messages" id="msgs">
+      <div class="msg msg-system">多模态自我进化智能体 — 输入文本或上传文件开始对话</div>
+    </div>
+    <div class="input-area">
+      <div class="file-pills" id="filePills"></div>
+      <div class="input-row">
+        <div class="attach-group">
+          <label class="att-btn" title="图片"><span>🖼</span><input type="file" accept="image/*,.png,.jpg,.jpeg,.gif,.bmp,.webp" multiple id="fiImg"></label>
+          <label class="att-btn" title="音频"><span>🎵</span><input type="file" accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a" multiple id="fiAud"></label>
+          <label class="att-btn" title="视频"><span>🎬</span><input type="file" accept="video/*,.mp4,.avi,.mov,.mkv,.webm" multiple id="fiVid"></label>
+        </div>
+        <textarea id="txtIn" placeholder="输入消息… (Enter 发送)" rows="1"></textarea>
+        <button class="send-btn" id="btnSend">➤</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right panel -->
+  <div class="right-panel">
+
+    <!-- Overview tab -->
+    <div class="panel-view active" id="pv-overview">
+      <div class="card">
+        <h4>🧠 认知状态</h4>
+        <div class="kv"><span class="k">交互次数</span><span class="v" id="oInteract">0</span></div>
+        <div class="kv"><span class="k">平均质量</span><span class="v" id="oAvg">—</span></div>
+        <div class="kv"><span class="k">趋势</span><span class="v" id="oTrend">—</span></div>
+      </div>
+      <div class="card">
+        <h4>📊 记忆总量</h4>
+        <div class="kv"><span class="k">情景记忆</span><span class="v" id="oEpCnt">0</span></div>
+        <div class="kv"><span class="k">语义知识</span><span class="v" id="oSemCnt">0</span></div>
+        <div class="kv"><span class="k">流程策略</span><span class="v" id="oProcCnt">0</span></div>
+        <div class="kv"><span class="k">持久记忆</span><span class="v g" id="oPersist">0</span></div>
+      </div>
+      <div class="card">
+        <h4>⚙️ 硬件</h4>
+        <div class="kv"><span class="k">CPU</span><span class="v" id="oHcpu">—</span></div>
+        <div class="kv"><span class="k">RAM</span><span class="v" id="oHram">—</span></div>
+        <div class="kv"><span class="k">GPU</span><span class="v" id="oHgpu">—</span></div>
+        <div class="kv"><span class="k">并行线程</span><span class="v" id="oHwork">—</span></div>
+      </div>
+      <div class="card">
+        <h4>📈 得分趋势</h4>
+        <div class="chart-wrap"><canvas id="chartScores"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Memory tab -->
+    <div class="panel-view" id="pv-memory">
+      <div style="display:flex;gap:4px;margin-bottom:12px;">
+        <button class="top-btn mem-tab active" data-mem="episodes">情景</button>
+        <button class="top-btn mem-tab" data-mem="knowledge">语义</button>
+        <button class="top-btn mem-tab" data-mem="procedures">流程</button>
+        <button class="top-btn mem-tab" data-mem="working">工作</button>
+      </div>
+      <div id="memList" class="mem-list"></div>
+    </div>
+
+    <!-- Evolution tab -->
+    <div class="panel-view" id="pv-evolution">
+      <div class="card">
+        <h4>🔄 自我进化轨迹</h4>
+        <div id="evoTimeline" class="mem-list"></div>
+      </div>
+      <div class="card">
+        <h4>🏆 最佳策略</h4>
+        <div id="evoTopProc" class="mem-list"></div>
+      </div>
+      <div class="card">
+        <h4>⚠️ 错误模式</h4>
+        <div id="evoErrors" class="mem-list"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ═══ State ═══════════════════════════════════════════════ */
+const F = { images: [], audios: [], videos: [] };
+let busy = false;
+
+/* ═══ DOM ═════════════════════════════════════════════════ */
+const $  = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const msgs    = $('#msgs');
+const txtIn   = $('#txtIn');
+const btnSend = $('#btnSend');
+const filePills = $('#filePills');
+
+/* ═══ Tabs ════════════════════════════════════════════════ */
+$$('.tab').forEach(t => t.addEventListener('click', () => {
+  $$('.tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  $$('.panel-view').forEach(p => p.classList.remove('active'));
+  $(`#pv-${t.dataset.tab}`).classList.add('active');
+  if (t.dataset.tab === 'memory') loadMemTab('episodes');
+  if (t.dataset.tab === 'evolution') loadEvolution();
+}));
+
+$$('.mem-tab').forEach(t => t.addEventListener('click', () => {
+  $$('.mem-tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  loadMemTab(t.dataset.mem);
+}));
+
+/* ═══ Files ═══════════════════════════════════════════════ */
+$('#fiImg').addEventListener('change', e => { pushFiles('images', e.target.files); e.target.value=''; });
+$('#fiAud').addEventListener('change', e => { pushFiles('audios', e.target.files); e.target.value=''; });
+$('#fiVid').addEventListener('change', e => { pushFiles('videos', e.target.files); e.target.value=''; });
+
+function pushFiles(k, list) { for (const f of list) F[k].push(f); renderPills(); }
+function rmFile(k, i) { F[k].splice(i, 1); renderPills(); }
+function clearFiles() { F.images=[]; F.audios=[]; F.videos=[]; renderPills(); }
+
+function renderPills() {
+  const icons = { images:'🖼', audios:'🎵', videos:'🎬' };
+  filePills.innerHTML = '';
+  for (const [k, list] of Object.entries(F)) list.forEach((f,i) => {
+    const d = document.createElement('span');
+    d.className = 'file-pill';
+    d.innerHTML = `${icons[k]} ${esc(f.name)} <span class="rm" onclick="rmFile('${k}',${i})">✕</span>`;
+    filePills.appendChild(d);
+  });
+}
+
+/* ═══ Messages ════════════════════════════════════════════ */
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function addMsg(role, text, atts) {
+  const el = document.createElement('div');
+  el.className = `msg msg-${role}`;
+  if (atts && atts.length) {
+    const ad = document.createElement('div');
+    ad.className = 'msg-att';
+    atts.forEach(a => {
+      const p = document.createElement('span');
+      p.className = 'att-pill';
+      if (a.url) { const img=document.createElement('img'); img.src=a.url; p.appendChild(img); }
+      p.appendChild(document.createTextNode(a.name));
+      ad.appendChild(p);
+    });
+    el.appendChild(ad);
+  }
+  const c = document.createElement('div');
+  c.textContent = text;
+  el.appendChild(c);
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function addTyping() {
+  const el = document.createElement('div');
+  el.className = 'msg msg-agent typing';
+  el.id = 'typing';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+function rmTyping() { const e=$('#typing'); if(e) e.remove(); }
+
+/* ═══ Send ════════════════════════════════════════════════ */
+async function send() {
+  if (busy) return;
+  const text = txtIn.value.trim();
+  const hasF = F.images.length + F.audios.length + F.videos.length > 0;
+  if (!text && !hasF) return;
+
+  busy = true;
+  btnSend.disabled = true;
+
+  const atts = [];
+  F.images.forEach(f => atts.push({name:f.name, url:URL.createObjectURL(f)}));
+  F.audios.forEach(f => atts.push({name:f.name}));
+  F.videos.forEach(f => atts.push({name:f.name}));
+
+  addMsg('user', text || '(媒体文件)', atts.length ? atts : null);
+  txtIn.value = '';
+  autoH();
+  addTyping();
+
+  const fd = new FormData();
+  fd.append('text', text);
+  F.images.forEach(f => fd.append('images', f));
+  F.audios.forEach(f => fd.append('audios', f));
+  F.videos.forEach(f => fd.append('videos', f));
+  clearFiles();
+
+  try {
+    const r = await fetch('/api/chat', {method:'POST', body:fd});
+    const d = await r.json();
+    rmTyping();
+    addMsg(d.status==='ok' ? 'agent' : 'system', d.response);
+    refreshAll();
+  } catch(e) {
+    rmTyping();
+    addMsg('system', '请求失败: '+e.message);
+  } finally {
+    busy = false;
+    btnSend.disabled = false;
+    txtIn.focus();
+  }
+}
+
+btnSend.addEventListener('click', send);
+txtIn.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+function autoH() { txtIn.style.height='auto'; txtIn.style.height=Math.min(txtIn.scrollHeight,140)+'px'; }
+txtIn.addEventListener('input', autoH);
+
+/* ═══ Reset ═══════════════════════════════════════════════ */
+$('#btnReset').addEventListener('click', async () => {
+  if (!confirm('确定重置会话？持久化记忆保留')) return;
+  await fetch('/api/reset', {method:'POST'});
+  msgs.innerHTML = '';
+  addMsg('system', '会话已重置');
+  refreshAll();
+});
+
+/* ═══ Overview data ═══════════════════════════════════════ */
+async function refreshOverview() {
+  try {
+    const [st, tr] = await Promise.all([
+      fetch('/api/status').then(r=>r.json()),
+      fetch('/api/memory/trend').then(r=>r.json()),
+    ]);
+
+    $('#oInteract').textContent = st.interaction_count || 0;
+
+    const mem = st.memory_summary || {};
+    $('#oEpCnt').textContent = mem.episodic_count ?? 0;
+    $('#oSemCnt').textContent = mem.semantic_count ?? 0;
+    $('#oProcCnt').textContent = mem.procedural_count ?? 0;
+
+    const pe = (mem.persistent_episodes||0) + (mem.persistent_knowledge||0) + (mem.persistent_procedures||0);
+    $('#oPersist').textContent = pe;
+
+    const trend = tr.trend || {};
+    const avg = typeof trend.average_score === 'number' ? trend.average_score : (trend.recent_avg ?? null);
+    if (avg !== null) {
+      const el = $('#oAvg');
+      el.textContent = avg.toFixed(1) + '/10';
+      el.className = 'v ' + (avg >= 7 ? 'g' : avg >= 5 ? 'y' : 'r');
+    }
+
+    const trendText = trend.trend || '—';
+    const tEl = $('#oTrend');
+    tEl.textContent = {improving:'📈 上升', declining:'📉 下降', stable:'➡️ 稳定'}[trendText] || trendText;
+    tEl.className = 'v ' + ({improving:'g', declining:'r', stable:'y'}[trendText] || '');
+
+    // Hardware
+    const r = st.resources || {};
+    $('#oHcpu').textContent = r.cpu_count_physical ? r.cpu_count_physical+' 核' : '—';
+    $('#oHram').textContent = r.ram_total_mb ? (r.ram_total_mb/1024).toFixed(0)+' GB' : '—';
+    const gpus = r.gpus || [];
+    $('#oHgpu').textContent = gpus.length ? gpus[0].name : '无';
+    $('#oHgpu').className = 'v ' + (gpus.length ? 'g' : '');
+    $('#oHwork').textContent = r.recommended_workers ?? '—';
+
+    // Score chart
+    drawChart(tr.timeline || []);
+  } catch(e) { /* silent */ }
+}
+
+/* ═══ Mini chart ══════════════════════════════════════════ */
+function drawChart(timeline) {
+  const canvas = $('#chartScores');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.parentElement.clientWidth;
+  const H = canvas.parentElement.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, W, H);
+  if (!timeline.length) {
+    ctx.fillStyle = '#5c5e78';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('暂无数据', W/2, H/2);
+    return;
+  }
+
+  const pad = { t:10, r:10, b:24, l:30 };
+  const cw = W - pad.l - pad.r;
+  const ch = H - pad.t - pad.b;
+
+  // Grid lines
+  ctx.strokeStyle = '#2a2a45';
+  ctx.lineWidth = 1;
+  for (let s = 0; s <= 10; s += 2) {
+    const y = pad.t + ch - (s / 10) * ch;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#5c5e78';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(s, pad.l - 4, y + 3);
+  }
+
+  const n = timeline.length;
+  const gap = n > 1 ? cw / (n - 1) : cw / 2;
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = '#7c6ff7';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  timeline.forEach((p, i) => {
+    const x = pad.l + (n > 1 ? i * gap : cw / 2);
+    const y = pad.t + ch - (p.score / 10) * ch;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + ch);
+  grad.addColorStop(0, 'rgba(124,111,247,0.25)');
+  grad.addColorStop(1, 'rgba(124,111,247,0)');
+  ctx.lineTo(pad.l + (n > 1 ? (n-1)*gap : cw/2), pad.t + ch);
+  ctx.lineTo(pad.l + (n > 1 ? 0 : cw/2), pad.t + ch);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Dots
+  timeline.forEach((p, i) => {
+    const x = pad.l + (n > 1 ? i * gap : cw / 2);
+    const y = pad.t + ch - (p.score / 10) * ch;
+    ctx.beginPath();
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = p.score >= 7 ? '#4ade80' : p.score >= 5 ? '#fbbf24' : '#f87171';
+    ctx.fill();
+  });
+
+  // X labels (sparse)
+  ctx.fillStyle = '#5c5e78';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(n / 6));
+  timeline.forEach((p, i) => {
+    if (i % step === 0 || i === n-1) {
+      const x = pad.l + (n > 1 ? i * gap : cw / 2);
+      ctx.fillText('#' + (i+1), x, H - 4);
+    }
+  });
+}
+
+/* ═══ Memory browser ══════════════════════════════════════ */
+async function loadMemTab(tab) {
+  const el = $('#memList');
+  el.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const data = await fetch(`/api/memory/${tab}`).then(r => r.json());
+    if (!data.length) { el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+
+    el.innerHTML = '';
+    if (tab === 'episodes') renderEpisodes(el, data);
+    else if (tab === 'knowledge') renderKnowledge(el, data);
+    else if (tab === 'procedures') renderProcedures(el, data);
+    else if (tab === 'working') renderWorking(el, data);
+  } catch(e) { el.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function tierTag(tier) {
+  const cls = 'mi-tag tag-' + (tier||'long_term');
+  const label = {persistent:'持久',long_term:'长期',working:'工作'}[tier] || tier;
+  return `<span class="${cls}">${label}</span>`;
+}
+
+function scoreColor(s) { return s >= 7 ? 'g' : s >= 5 ? 'y' : 'r'; }
+
+function renderEpisodes(el, data) {
+  // sort newest first
+  data.sort((a,b) => (b.timestamp||'').localeCompare(a.timestamp||''));
+  data.forEach(e => {
+    const d = document.createElement('div');
+    d.className = 'mem-item';
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('zh-CN', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    d.innerHTML = `
+      <div class="mi-head">
+        <span class="mi-title">${esc(e.strategy_used || e.task_type)}</span>
+        ${tierTag(e.memory_tier)}
+      </div>
+      <div class="mi-body">
+        「${esc(truncate(e.user_intent, 60))}」
+        <span class="mi-score" style="color:var(--${scoreColor(e.outcome_score)==='g'?'green':scoreColor(e.outcome_score)==='y'?'yellow':'red'})">${e.outcome_score}/10</span>
+      </div>
+      ${e.lessons && e.lessons.length ? '<ul class="mi-lessons">'+e.lessons.map(l=>'<li>'+esc(truncate(l,80))+'</li>').join('')+'</ul>' : ''}
+      ${e.error_patterns && e.error_patterns.length ? '<div class="mi-meta" style="color:var(--red)">⚠ '+esc(e.error_patterns.join('; '))+'</div>' : ''}
+      <div class="mi-meta">${ts} · ${esc(e.task_type)} · ${(e.modalities||[]).join(', ')}</div>
+    `;
+    el.appendChild(d);
+  });
+}
+
+function renderKnowledge(el, data) {
+  data.forEach(e => {
+    const d = document.createElement('div');
+    d.className = 'mem-item';
+    const conf = Math.round((e.confidence||0)*100);
+    d.innerHTML = `
+      <div class="mi-head">
+        <span class="mi-title">${esc(e.domain||'通用')}</span>
+        ${tierTag(e.memory_tier)}
+      </div>
+      <div class="mi-body">${esc(e.knowledge)}</div>
+      <div class="mi-meta">置信度 ${conf}% · 来源 ${(e.source_episodes||[]).length} 条交互</div>
+    `;
+    el.appendChild(d);
+  });
+}
+
+function renderProcedures(el, data) {
+  data.sort((a,b) => (b.success_rate||0) - (a.success_rate||0));
+  data.forEach(e => {
+    const d = document.createElement('div');
+    d.className = 'mem-item';
+    const rate = Math.round((e.success_rate||0)*100);
+    d.innerHTML = `
+      <div class="mi-head">
+        <span class="mi-title">${esc(e.name)}</span>
+        ${tierTag(e.memory_tier)}
+      </div>
+      <div class="mi-body">${esc(e.description||'')}</div>
+      <ol class="mi-steps">${(e.steps||[]).map(s=>'<li>'+esc(s)+'</li>').join('')}</ol>
+      <div class="mi-meta">成功率 ${rate}% · 使用 ${e.usage_count||0} 次 · ${esc(e.task_type)}</div>
+    `;
+    el.appendChild(d);
+  });
+}
+
+function renderWorking(el, data) {
+  if (!data.length) { el.innerHTML = '<div class="empty">工作记忆为空（会话级）</div>'; return; }
+  data.forEach(e => {
+    const d = document.createElement('div');
+    d.className = 'mem-item';
+    d.innerHTML = `
+      <div class="mi-head">
+        <span class="mi-title">${esc(e.category||'item')}</span>
+        <span class="mi-tag tag-working">${esc(e.source||'')}</span>
+      </div>
+      <div class="mi-body">${esc(truncate(e.content, 200))}</div>
+      <div class="mi-meta">相关度 ${Math.round((e.relevance||0)*100)}%</div>
+    `;
+    el.appendChild(d);
+  });
+}
+
+function truncate(s, n) { return (!s || s.length <= n) ? (s||'') : s.slice(0, n) + '…'; }
+
+/* ═══ Evolution view ══════════════════════════════════════ */
+async function loadEvolution() {
+  try {
+    const [trendData, episodes, procedures] = await Promise.all([
+      fetch('/api/memory/trend').then(r=>r.json()),
+      fetch('/api/memory/episodes').then(r=>r.json()),
+      fetch('/api/memory/procedures').then(r=>r.json()),
+    ]);
+
+    // Timeline — show score progression with strategy evolution
+    const tlEl = $('#evoTimeline');
+    const timeline = trendData.timeline || [];
+    if (!timeline.length) {
+      tlEl.innerHTML = '<div class="empty">尚未产生交互记录</div>';
+    } else {
+      tlEl.innerHTML = '';
+      // Show newest first
+      [...timeline].reverse().forEach((t, i) => {
+        const d = document.createElement('div');
+        d.className = 'mem-item';
+        const ts = t.ts ? new Date(t.ts).toLocaleString('zh-CN', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+        d.innerHTML = `
+          <div class="mi-head">
+            <span class="mi-title">#${timeline.length - i} ${esc(t.strategy||'')}</span>
+            <span class="mi-score" style="color:var(--${scoreColor(t.score)==='g'?'green':scoreColor(t.score)==='y'?'yellow':'red'})">${t.score}/10</span>
+          </div>
+          <div class="mi-meta">${ts} · ${esc(t.task)} ${tierTag(t.tier)}</div>
+        `;
+        tlEl.appendChild(d);
+      });
+    }
+
+    // Top procedures
+    const procEl = $('#evoTopProc');
+    const sorted = [...procedures].sort((a,b) => (b.success_rate||0)-(a.success_rate||0)).slice(0,5);
+    if (!sorted.length) {
+      procEl.innerHTML = '<div class="empty">尚无策略记录</div>';
+    } else {
+      procEl.innerHTML = '';
+      sorted.forEach(p => {
+        const d = document.createElement('div');
+        d.className = 'mem-item';
+        const rate = Math.round((p.success_rate||0)*100);
+        d.innerHTML = `
+          <div class="mi-head">
+            <span class="mi-title">${esc(p.name)}</span>
+            <span style="color:var(--green);font-size:12px;font-weight:600">${rate}%</span>
+          </div>
+          <div class="mi-meta">使用 ${p.usage_count||0} 次 · ${esc(p.task_type)}</div>
+        `;
+        procEl.appendChild(d);
+      });
+    }
+
+    // Error patterns aggregated
+    const errEl = $('#evoErrors');
+    const errMap = {};
+    episodes.forEach(e => (e.error_patterns||[]).forEach(p => { errMap[p] = (errMap[p]||0) + 1; }));
+    const errors = Object.entries(errMap).sort((a,b)=>b[1]-a[1]);
+    if (!errors.length) {
+      errEl.innerHTML = '<div class="empty" style="color:var(--green)">✓ 暂无错误模式</div>';
+    } else {
+      errEl.innerHTML = '';
+      errors.forEach(([msg, cnt]) => {
+        const d = document.createElement('div');
+        d.className = 'mem-item';
+        d.innerHTML = `<div class="mi-body" style="color:var(--red)">${esc(msg)}</div><div class="mi-meta">出现 ${cnt} 次</div>`;
+        errEl.appendChild(d);
+      });
+    }
+  } catch(e) { /* silent */ }
+}
+
+/* ═══ Refresh all panels ══════════════════════════════════ */
+function refreshAll() {
+  refreshOverview();
+  // Refresh active memory tab if visible
+  const activeMemTab = document.querySelector('.mem-tab.active');
+  if (activeMemTab && $('#pv-memory').classList.contains('active')) {
+    loadMemTab(activeMemTab.dataset.mem);
+  }
+  if ($('#pv-evolution').classList.contains('active')) loadEvolution();
+}
+
+/* ═══ Init ════════════════════════════════════════════════ */
+refreshOverview();
+txtIn.focus();
+
+// Check LLM connectivity
+fetch('/api/status').then(r => r.json()).then(s => {
+  const r = s.resources || {};
+  if (r.ollama_running) {
+    $('#llmLabel').textContent = '伺服中';
+  } else {
+    $('#llmLabel').textContent = '就绪';
+  }
+}).catch(() => {
+  $('#llmLabel').textContent = '未连接';
+  document.querySelector('.llm-dot').style.background = '#f87171';
+});
+</script>
+
+</body>
+</html>

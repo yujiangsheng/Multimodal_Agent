@@ -3,14 +3,14 @@
 Handles audio understanding, transcription, and cross-modal reasoning
 between audio and text.
 
-Backend: **Qwen2.5-Omni** -- a native omni-modal model that accepts
+Backend: **Qwen3-VL** -- a native multimodal model that accepts
 audio input directly alongside text, eliminating the need for a
 separate transcription step.
 
 Skills / Capabilities
 ---------------------
 1. **Native Audio Understanding**
-   Send raw audio directly to Qwen2.5-Omni for end-to-end understanding
+   Send raw audio directly to Qwen3-VL for end-to-end understanding
    without a separate transcription model.
 
 2. **Speech-to-Text Transcription**
@@ -38,7 +38,7 @@ Skills / Capabilities
    mood conveyed.
 
 8. **Multilingual Support**
-   Handle audio in any language supported by Qwen2.5-Omni and auto-detect
+   Handle audio in any language supported by Qwen3-VL and auto-detect
    the language spoken.
 """
 
@@ -58,7 +58,7 @@ _SYSTEM_PROMPT = (
 
 
 class AudioProcessor(BaseAgent):
-    """Processes audio-modality tasks natively via Qwen2.5-Omni.
+    """Processes audio-modality tasks natively via Qwen3-VL.
 
     Audio is sent directly to the omni-modal LLM as ``input_audio``
     content parts, enabling richer understanding (tone, emotion,
@@ -70,7 +70,7 @@ class AudioProcessor(BaseAgent):
     # No extra openai client needed -- we reuse self.llm (LLMClient)
 
     def run(self, *, task: str, audio_paths: list[str], **kwargs: Any) -> str:  # type: ignore[override]
-        """Execute an audio task by sending audio directly to Qwen2.5-Omni.
+        """Execute an audio task by sending audio directly to Qwen3-VL.
 
         Parameters
         ----------

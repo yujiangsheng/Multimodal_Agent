@@ -10,10 +10,11 @@ Environment Variables
 ========================= ========================================
 Variable                  Description
 ========================= ========================================
-``PINOCCHIO_MODEL``       LLM model name (default: ``qwen2.5-omni``)
+``PINOCCHIO_MODEL``       LLM model name (default: ``qwen3-vl:4b``)
 ``OLLAMA_API_KEY``        API key (default: ``ollama``)
 ``OPENAI_BASE_URL``       Base URL for the OpenAI-compatible API
 ``PINOCCHIO_DATA_DIR``    Directory for persistent memory files
+``PINOCCHIO_NUM_CTX``     Ollama context window size (default: 8192)
 ``PINOCCHIO_MAX_WORKERS`` Max parallel worker threads (auto if unset)
 ``PINOCCHIO_PARALLEL``    Enable parallel modality preprocessing
 ========================= ========================================
@@ -33,8 +34,8 @@ class PinocchioConfig:
     ``PINOCCHIO_``.
     """
 
-    # LLM settings (Qwen2.5-Omni via Ollama local server)
-    model: str = field(default_factory=lambda: os.getenv("PINOCCHIO_MODEL", "qwen2.5-omni"))
+    # LLM settings (Qwen3-VL via Ollama local server)
+    model: str = field(default_factory=lambda: os.getenv("PINOCCHIO_MODEL", "qwen3-vl:4b"))
     api_key: str = field(default_factory=lambda: os.getenv("OLLAMA_API_KEY", "ollama"))
     base_url: str | None = field(default_factory=lambda: os.getenv(
         "OPENAI_BASE_URL", "http://localhost:11434/v1",
@@ -48,6 +49,11 @@ class PinocchioConfig:
     # Behaviour settings
     meta_reflect_interval: int = 5
     verbose: bool = True
+
+    # Ollama context window — lower = less KV cache memory, faster inference
+    num_ctx: int = field(
+        default_factory=lambda: int(os.getenv("PINOCCHIO_NUM_CTX", "8192"))
+    )
 
     # Resource / parallelism settings
     max_workers: int | None = field(

@@ -22,7 +22,7 @@ class TestLLMClient:
     @patch("pinocchio.utils.llm_client.openai")
     def test_init_default_model(self, mock_openai):
         client = LLMClient()
-        assert "Qwen2.5-Omni" in client.model or client.model  # env may override
+        assert "qwen3-vl" in client.model.lower() or client.model  # env may override
 
     @patch("pinocchio.utils.llm_client.openai")
     def test_chat_calls_openai_compatible(self, mock_openai):

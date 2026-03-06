@@ -89,6 +89,7 @@ class PerceptionAgent(BaseAgent):
         llm_result = self.llm.ask_json(
             system=_SYSTEM_PROMPT,
             user=f"User input:\n{user_text}",
+            max_tokens=2048,
         )
 
         try:

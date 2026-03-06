@@ -82,7 +82,7 @@ class TestVisionProcessor:
 
 
 # ------------------------------------------------------------------
-# AudioProcessor (Qwen2.5-Omni native audio)
+# AudioProcessor (Qwen3-VL native audio)
 # ------------------------------------------------------------------
 
 
@@ -159,7 +159,7 @@ class TestVideoProcessor:
             assert frames == []
 
     def test_run_native_mode_uses_build_video_message(self, mock_llm, memory, logger):
-        """Default native_video=True sends video directly to Qwen2.5-Omni."""
+        """Default native_video=True sends video directly to Qwen3-VL."""
         mock_llm.build_video_message.return_value = {"role": "user", "content": []}
         mock_llm.chat.return_value = "Video shows a person walking in a park."
 
