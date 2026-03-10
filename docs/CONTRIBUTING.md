@@ -9,7 +9,7 @@
 ### 1. 克隆并安装
 
 ```bash
-git clone https://github.com/yujansen/Multimodal_Agent.git
+git clone https://github.com/yujiangsheng/Multimodal_Agent.git
 cd Multimodal_Agent
 
 # 创建虚拟环境
@@ -216,4 +216,4 @@ agent.chat("你的问题")
 
 ## 联系方式
 
-如有问题或建议，欢迎通过 [GitHub Issues](https://github.com/yujansen/Multimodal_Agent/issues) 提出。
+如有问题或建议，欢迎通过 [GitHub Issues](https://github.com/yujiangsheng/Multimodal_Agent/issues) 提出。

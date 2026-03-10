@@ -1,6 +1,6 @@
 # 🎭 Pinocchio — 多模态自我进化智能体
 
-[![Author](https://img.shields.io/badge/Author-Jansen%20Yu-blue)](https://github.com/yujansen)
+[![Author](https://img.shields.io/badge/Author-Jiangsheng%20Yu-blue)](https://github.com/yujiangsheng)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org)
 [![Tests](https://img.shields.io/badge/Tests-608%20passed-brightgreen)]()
@@ -125,7 +125,7 @@ Multimodal_Agent/
 
 ```bash
 # 克隆项目
-git clone https://github.com/yujansen/Multimodal_Agent.git
+git clone https://github.com/yujiangsheng/Multimodal_Agent.git
 cd Multimodal_Agent
 
 # 创建虚拟环境
@@ -626,7 +626,7 @@ print(registry.to_openai_schema())        # OpenAI function-calling 格式
 
 ## 👤 作者与维护者
 
-**Jiangsheng Yu** — [@yujansen](https://github.com/yujansen)
+**Jiangsheng Yu** — [@yujiangsheng](https://github.com/yujiangsheng)
 
 ## 📄 许可证
 

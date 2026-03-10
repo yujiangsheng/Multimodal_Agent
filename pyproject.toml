@@ -9,7 +9,7 @@ description = "Pinocchio — 多模态自我进化智能体 / Multimodal Self-Ev
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-authors = [{ name = "Jiangsheng Yu", email = "yujansen@users.noreply.github.com" }]
+authors = [{ name = "Jiangsheng Yu", email = "yujiangsheng@users.noreply.github.com" }]
 keywords = [
     "agent",
     "multimodal",
