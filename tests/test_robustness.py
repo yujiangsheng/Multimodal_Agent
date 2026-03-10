@@ -30,12 +30,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-from pinocchio.agents.perception_agent import PerceptionAgent
-from pinocchio.agents.strategy_agent import StrategyAgent
-from pinocchio.agents.evaluation_agent import EvaluationAgent
-from pinocchio.agents.execution_agent import ExecutionAgent
-from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent
+from pinocchio.agents.unified_agent import PinocchioAgent
 from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.memory.episodic_memory import EpisodicMemory
 from pinocchio.memory.semantic_memory import SemanticMemory
@@ -82,8 +77,8 @@ class TestPerceptionEnumSafety:
             "ambiguities": [],
             "analysis": "test",
         }
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert result.task_type == TaskType.UNKNOWN
 
     def test_invalid_complexity_defaults_to_moderate(self, mock_llm, memory_manager, mock_logger):
@@ -94,8 +89,8 @@ class TestPerceptionEnumSafety:
             "ambiguities": [],
             "analysis": "test",
         }
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert result.complexity == Complexity.MODERATE
 
     def test_invalid_confidence_defaults_to_medium(self, mock_llm, memory_manager, mock_logger):
@@ -106,8 +101,8 @@ class TestPerceptionEnumSafety:
             "ambiguities": [],
             "analysis": "test",
         }
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert result.confidence == ConfidenceLevel.MEDIUM
 
     def test_complexity_out_of_range_defaults(self, mock_llm, memory_manager, mock_logger):
@@ -118,15 +113,15 @@ class TestPerceptionEnumSafety:
             "ambiguities": [],
             "analysis": "test",
         }
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert result.complexity == Complexity.MODERATE
 
     def test_none_values_use_defaults(self, mock_llm, memory_manager, mock_logger):
         """LLM returns None for all fields — should fall through to defaults."""
         mock_llm.ask_json.return_value = {}
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert result.task_type == TaskType.UNKNOWN
         assert result.complexity == Complexity.MODERATE
         assert result.confidence == ConfidenceLevel.MEDIUM
@@ -140,8 +135,8 @@ class TestPerceptionEnumSafety:
             "ambiguities": "This is a string, not a list",
             "analysis": "test",
         }
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="hello"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="hello"))
         assert isinstance(result.ambiguities, list)
         assert result.ambiguities == []
 
@@ -160,9 +155,9 @@ class TestStrategyEnumSafety:
             "is_novel": True,
             "analysis": "",
         }
-        agent = StrategyAgent(mock_llm, memory_manager, mock_logger)
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
         perception = PerceptionResult(task_type=TaskType.ANALYSIS, modalities=[Modality.TEXT])
-        result = agent.run(perception=perception)
+        result = agent.strategize(perception=perception)
         assert result.fusion_strategy == FusionStrategy.LATE_FUSION
 
 
@@ -180,8 +175,8 @@ class TestEvaluationScoreSafety:
             "cross_modal_coherence": "fine",
             "analysis": "test",
         }
-        agent = EvaluationAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -197,8 +192,8 @@ class TestEvaluationScoreSafety:
             "strategy_effectiveness": -10,
             "cross_modal_coherence": -1,
         }
-        agent = EvaluationAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -215,8 +210,8 @@ class TestEvaluationScoreSafety:
             "cross_modal_coherence": 100,
             "is_complete": True,
         }
-        agent = EvaluationAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -233,8 +228,8 @@ class TestEvaluationScoreSafety:
             "cross_modal_coherence": 6.1,
             "is_complete": True,
         }
-        agent = EvaluationAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -343,8 +338,8 @@ class TestExecutionAgentModalityContext:
 
     def test_modality_context_included_in_prompt(self, mock_llm, memory_manager, mock_logger):
         mock_llm.ask.return_value = "response with context"
-        agent = ExecutionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="describe what you see"),
             perception=PerceptionResult(
                 task_type=TaskType.MULTIMODAL_REASONING,
@@ -366,8 +361,8 @@ class TestExecutionAgentModalityContext:
 
     def test_no_modality_context_no_section(self, mock_llm, memory_manager, mock_logger):
         mock_llm.ask.return_value = "plain response"
-        agent = ExecutionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="hello"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -379,8 +374,8 @@ class TestExecutionAgentModalityContext:
 
     def test_empty_modality_context_no_section(self, mock_llm, memory_manager, mock_logger):
         mock_llm.ask.return_value = "plain response"
-        agent = ExecutionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="hello"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -703,7 +698,7 @@ class TestLearningBoundaries:
 
     def _make_agent(self, mock_llm, memory_manager, mock_logger, llm_result):
         mock_llm.ask_json.return_value = llm_result
-        return LearningAgent(mock_llm, memory_manager, mock_logger)
+        return PinocchioAgent(mock_llm, memory_manager, mock_logger)
 
     def test_quality_6_procedure_success(self, mock_llm, memory_manager, mock_logger):
         """output_quality == 6 should count as success for procedure usage update."""
@@ -723,7 +718,7 @@ class TestLearningBoundaries:
             "should_save_procedure": False,
         })
         evaluation = EvaluationResult(output_quality=6, strategy_effectiveness=6)
-        agent.run(
+        agent.learn(
             user_input_text="code task",
             perception=PerceptionResult(task_type=TaskType.CODE_GENERATION),
             strategy=StrategyResult(selected_strategy="test"),
@@ -747,7 +742,7 @@ class TestLearningBoundaries:
             "should_save_procedure": False,
         })
         evaluation = EvaluationResult(output_quality=5)
-        agent.run(
+        agent.learn(
             user_input_text="code task",
             perception=PerceptionResult(task_type=TaskType.CODE_GENERATION),
             strategy=StrategyResult(selected_strategy="test"),
@@ -766,7 +761,7 @@ class TestLearningBoundaries:
             "procedure_steps": ["step1", "step2"],
         })
         evaluation = EvaluationResult(output_quality=7)
-        agent.run(
+        agent.learn(
             user_input_text="creative task",
             perception=PerceptionResult(task_type=TaskType.CREATIVE_WRITING),
             strategy=StrategyResult(selected_strategy="creative"),
@@ -785,7 +780,7 @@ class TestLearningBoundaries:
             "procedure_steps": ["step1"],
         })
         evaluation = EvaluationResult(output_quality=6)
-        agent.run(
+        agent.learn(
             user_input_text="task",
             perception=PerceptionResult(task_type=TaskType.CREATIVE_WRITING),
             strategy=StrategyResult(selected_strategy="test"),
@@ -804,21 +799,21 @@ class TestMetaReflectionInterval:
     """Test custom meta_reflect_interval values."""
 
     def test_custom_interval_3(self, mock_llm, memory_manager, mock_logger):
-        agent = MetaReflectionAgent(mock_llm, memory_manager, mock_logger, meta_reflect_interval=3)
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger, meta_reflect_interval=3)
         # No episodes → should not trigger
-        assert not agent.should_trigger()
+        assert not agent.should_meta_reflect()
         # Add 3 episodes
         for i in range(3):
             memory_manager.episodic.add(EpisodicRecord(user_intent=f"test {i}"))
-        assert agent.should_trigger()
+        assert agent.should_meta_reflect()
 
     def test_custom_interval_7(self, mock_llm, memory_manager, mock_logger):
-        agent = MetaReflectionAgent(mock_llm, memory_manager, mock_logger, meta_reflect_interval=7)
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger, meta_reflect_interval=7)
         for i in range(6):
             memory_manager.episodic.add(EpisodicRecord(user_intent=f"test {i}"))
-        assert not agent.should_trigger()
+        assert not agent.should_meta_reflect()
         memory_manager.episodic.add(EpisodicRecord(user_intent="7th"))
-        assert agent.should_trigger()
+        assert agent.should_meta_reflect()
 
 
 # =====================================================================
@@ -971,9 +966,9 @@ class TestEvaluationTruncation:
             "strategy_effectiveness": 7,
             "cross_modal_coherence": 5,
         }
-        agent = EvaluationAgent(mock_llm, memory_manager, mock_logger)
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
         long_response = AgentMessage(content="x" * 10_000)
-        agent.run(
+        agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -1012,8 +1007,8 @@ class TestPerceptionLessonsTruncation:
                 modalities=[Modality.TEXT],
                 lessons=[f"lesson_{i}_a", f"lesson_{i}_b", f"lesson_{i}_c"],
             ))
-        agent = PerceptionAgent(mock_llm, memory_manager, mock_logger)
-        result = agent.run(user_input=MultimodalInput(text="test"))
+        agent = PinocchioAgent(mock_llm, memory_manager, mock_logger)
+        result = agent.perceive(user_input=MultimodalInput(text="test"))
         assert len(result.relevant_lessons) <= 5
 
 

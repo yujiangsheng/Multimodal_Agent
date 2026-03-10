@@ -14,12 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pinocchio.agents.base_agent import BaseAgent
-from pinocchio.agents.perception_agent import PerceptionAgent
-from pinocchio.agents.strategy_agent import StrategyAgent
-from pinocchio.agents.execution_agent import ExecutionAgent
-from pinocchio.agents.evaluation_agent import EvaluationAgent
-from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent
+from pinocchio.agents.unified_agent import PinocchioAgent
 from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.models.enums import (
     AgentRole, Complexity, ConfidenceLevel, FusionStrategy,
@@ -112,7 +107,7 @@ class TestBaseAgent:
 
     def test_log_methods_delegate_to_logger(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
-        agent = PerceptionAgent(llm, memory, logger)
+        agent = PinocchioAgent(llm, memory, logger)
         # These should not raise
         agent._log("info message")
         agent._warn("warning")
@@ -120,15 +115,15 @@ class TestBaseAgent:
 
 
 # =====================================================================
-# PerceptionAgent
+# Perception Skill
 # =====================================================================
-class TestPerceptionAgentComprehensive:
+class TestPerceptionSkillComprehensive:
     """Extended perception tests covering modalities, edge cases, and error handling."""
 
     def _make_agent(self, tmp_path, json_response):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask_json.return_value = json_response
-        return PerceptionAgent(llm, memory, logger)
+        return PinocchioAgent(llm, memory, logger)
 
     def test_audio_modality_detected(self, tmp_path):
         agent = self._make_agent(tmp_path, {
@@ -140,7 +135,7 @@ class TestPerceptionAgentComprehensive:
             "analysis": "Audio QA",
         })
         inp = MultimodalInput(audio_paths=["test.wav"])
-        result = agent.run(user_input=inp)
+        result = agent.perceive(user_input=inp)
         assert Modality.AUDIO in result.modalities
 
     def test_video_modality_detected(self, tmp_path):
@@ -153,7 +148,7 @@ class TestPerceptionAgentComprehensive:
             "analysis": "Video analysis",
         })
         inp = MultimodalInput(text="Describe", video_paths=["clip.mp4"])
-        result = agent.run(user_input=inp)
+        result = agent.perceive(user_input=inp)
         assert Modality.VIDEO in result.modalities
         assert result.ambiguities == ["unclear context"]
 
@@ -167,7 +162,7 @@ class TestPerceptionAgentComprehensive:
             "analysis": "Image only",
         })
         inp = MultimodalInput(image_paths=["img.jpg"])
-        result = agent.run(user_input=inp)
+        result = agent.perceive(user_input=inp)
         assert result.task_type == TaskType.UNKNOWN
 
     def test_all_four_modalities(self, tmp_path):
@@ -185,7 +180,7 @@ class TestPerceptionAgentComprehensive:
             audio_paths=["b.wav"],
             video_paths=["c.mp4"],
         )
-        result = agent.run(user_input=inp)
+        result = agent.perceive(user_input=inp)
         assert len(result.modalities) == 4
         assert result.complexity == Complexity.EXTREME
 
@@ -209,8 +204,8 @@ class TestPerceptionAgentComprehensive:
             "ambiguities": [],
             "analysis": "Similar",
         }
-        agent = PerceptionAgent(llm, memory, logger)
-        result = agent.run(user_input=MultimodalInput(text="new question"))
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.perceive(user_input=MultimodalInput(text="new question"))
         assert len(result.similar_episodes) >= 1
         assert len(result.relevant_lessons) >= 1
 
@@ -224,7 +219,7 @@ class TestPerceptionAgentComprehensive:
             "ambiguities": [],
             "analysis": "With context",
         })
-        result = agent.run(
+        result = agent.perceive(
             user_input=MultimodalInput(text="hello"),
             modality_context={"vision": "A cat on a table"},
         )
@@ -237,21 +232,21 @@ class TestPerceptionAgentComprehensive:
             # missing modalities, complexity, confidence, etc.
         })
         inp = MultimodalInput(text="test")
-        result = agent.run(user_input=inp)
+        result = agent.perceive(user_input=inp)
         # Should still return a PerceptionResult (with defaults)
         assert isinstance(result, PerceptionResult)
 
 
 # =====================================================================
-# StrategyAgent
+# Strategy Skill
 # =====================================================================
-class TestStrategyAgentComprehensive:
+class TestStrategySkillComprehensive:
     """Extended strategy tests: ambiguities, lessons, fallbacks, fusion."""
 
     def _make_agent(self, tmp_path, json_response):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask_json.return_value = json_response
-        return StrategyAgent(llm, memory, logger)
+        return PinocchioAgent(llm, memory, logger)
 
     def test_with_ambiguities_in_perception(self, tmp_path):
         agent = self._make_agent(tmp_path, {
@@ -265,7 +260,7 @@ class TestStrategyAgentComprehensive:
             "analysis": "Handle ambiguity carefully.",
         })
         p = _perception(ambiguities=["unclear scope", "vague terms"])
-        result = agent.run(perception=p)
+        result = agent.strategize(perception=p)
         assert result.selected_strategy == "clarify_then_answer"
         assert result.is_novel is True
 
@@ -281,7 +276,7 @@ class TestStrategyAgentComprehensive:
             "analysis": "Using lessons.",
         })
         p = _perception(relevant_lessons=["use analogies", "keep it simple"])
-        result = agent.run(perception=p)
+        result = agent.strategize(perception=p)
         assert result.fusion_strategy == FusionStrategy.EARLY_FUSION
 
     def test_hybrid_fusion_strategy(self, tmp_path):
@@ -299,7 +294,7 @@ class TestStrategyAgentComprehensive:
             modalities=[Modality.TEXT, Modality.IMAGE, Modality.AUDIO],
             complexity=Complexity.EXTREME,
         )
-        result = agent.run(perception=p)
+        result = agent.strategize(perception=p)
         assert result.fusion_strategy == FusionStrategy.HYBRID_FUSION
 
     def test_default_values_on_partial_json(self, tmp_path):
@@ -307,7 +302,7 @@ class TestStrategyAgentComprehensive:
             "selected_strategy": "partial",
             # everything else missing
         })
-        result = agent.run(perception=_perception())
+        result = agent.strategize(perception=_perception())
         assert result.selected_strategy == "partial"
         assert result.is_novel is True  # default when missing from JSON
         assert result.fallback_plan == ""  # default
@@ -335,8 +330,8 @@ class TestStrategyAgentComprehensive:
             "is_novel": False,
             "analysis": "Reuse proven.",
         }
-        agent = StrategyAgent(llm, memory, logger)
-        result = agent.run(perception=_perception())
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.strategize(perception=_perception())
         assert result.selected_strategy == "proven_qa"
         # Verify LLM was called with procedure context
         call_args = llm.ask_json.call_args
@@ -344,18 +339,18 @@ class TestStrategyAgentComprehensive:
 
 
 # =====================================================================
-# ExecutionAgent
+# Execution Skill
 # =====================================================================
-class TestExecutionAgentComprehensive:
+class TestExecutionSkillComprehensive:
     """Extended execution tests: audio, video, modality_context, errors."""
 
     def test_execution_with_modality_context(self, tmp_path):
         """Modality context should be passed but not break execution."""
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask.return_value = "Based on the image, I see a landscape."
-        agent = ExecutionAgent(llm, memory, logger)
+        agent = PinocchioAgent(llm, memory, logger)
         inp = MultimodalInput(text="Describe what you see")
-        result = agent.run(
+        result = agent.execute(
             user_input=inp,
             perception=_perception(),
             strategy=_strategy(),
@@ -367,8 +362,8 @@ class TestExecutionAgentComprehensive:
     def test_execution_novel_strategy_lower_confidence(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask.return_value = "Experimental response."
-        agent = ExecutionAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(is_novel=True),
@@ -378,8 +373,8 @@ class TestExecutionAgentComprehensive:
     def test_execution_proven_strategy_higher_confidence(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask.return_value = "Proven response."
-        agent = ExecutionAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(is_novel=False),
@@ -390,7 +385,7 @@ class TestExecutionAgentComprehensive:
         llm, memory, logger = _mock_infra(tmp_path)
         llm.build_vision_message.return_value = {"role": "user", "content": []}
         llm.chat.return_value = "I see objects in the image."
-        agent = ExecutionAgent(llm, memory, logger)
+        agent = PinocchioAgent(llm, memory, logger)
         # Create a real tiny PNG so _encode_image can read it
         img_file = tmp_path / "test.png"
         img_file.write_bytes(
@@ -400,7 +395,7 @@ class TestExecutionAgentComprehensive:
             b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
         )
         inp = MultimodalInput(text="Describe", image_paths=[str(img_file)])
-        result = agent.run(
+        result = agent.execute(
             user_input=inp,
             perception=_perception(modalities=[Modality.TEXT, Modality.IMAGE]),
             strategy=_strategy(),
@@ -411,8 +406,8 @@ class TestExecutionAgentComprehensive:
     def test_execution_metadata_contains_strategy(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask.return_value = "Response."
-        agent = ExecutionAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(selected_strategy="my_strategy"),
@@ -421,15 +416,15 @@ class TestExecutionAgentComprehensive:
 
 
 # =====================================================================
-# EvaluationAgent
+# Evaluation Skill
 # =====================================================================
-class TestEvaluationAgentComprehensive:
+class TestEvaluationSkillComprehensive:
     """Extended evaluation tests: partial completion, multimodal, defaults."""
 
     def _make_agent(self, tmp_path, json_response):
         llm, memory, logger = _mock_infra(tmp_path)
         llm.ask_json.return_value = json_response
-        return EvaluationAgent(llm, memory, logger)
+        return PinocchioAgent(llm, memory, logger)
 
     def test_partial_completion(self, tmp_path):
         agent = self._make_agent(tmp_path, {
@@ -442,7 +437,7 @@ class TestEvaluationAgentComprehensive:
             "cross_modal_coherence": 3,
             "analysis": "Partial.",
         })
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="complex question"),
             perception=_perception(complexity=Complexity.EXTREME),
             strategy=_strategy(),
@@ -462,7 +457,7 @@ class TestEvaluationAgentComprehensive:
             "cross_modal_coherence": 1,
             "analysis": "Failed.",
         })
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(),
@@ -482,7 +477,7 @@ class TestEvaluationAgentComprehensive:
             "cross_modal_coherence": 10,
             "analysis": "Excellent multimodal.",
         })
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="Describe", image_paths=["a.jpg"]),
             perception=_perception(modalities=[Modality.TEXT, Modality.IMAGE]),
             strategy=_strategy(fusion_strategy=FusionStrategy.EARLY_FUSION),
@@ -496,7 +491,7 @@ class TestEvaluationAgentComprehensive:
             "is_complete": True,
             # everything else missing
         })
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=_perception(),
             strategy=_strategy(),
@@ -507,9 +502,9 @@ class TestEvaluationAgentComprehensive:
 
 
 # =====================================================================
-# LearningAgent
+# Learning Skill
 # =====================================================================
-class TestLearningAgentComprehensive:
+class TestLearningSkillComprehensive:
     """Extended learning tests: procedure updates, synthesis, edge cases."""
 
     def test_high_quality_saves_procedure(self, tmp_path):
@@ -524,8 +519,8 @@ class TestLearningAgentComprehensive:
             "procedure_name": "analogy_qa",
             "procedure_steps": ["understand", "find analogy", "explain"],
         }
-        agent = LearningAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.learn(
             user_input_text="What is X?",
             perception=_perception(),
             strategy=_strategy(selected_strategy="analogy_qa"),
@@ -547,8 +542,8 @@ class TestLearningAgentComprehensive:
             "procedure_name": "bad_proc",
             "procedure_steps": ["step1"],
         }
-        agent = LearningAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.learn(
             user_input_text="test",
             perception=_perception(),
             strategy=_strategy(),
@@ -580,8 +575,8 @@ class TestLearningAgentComprehensive:
             "procedure_name": "",
             "procedure_steps": [],
         }
-        agent = LearningAgent(llm, memory, logger)
-        agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        agent.learn(
             user_input_text="test",
             perception=_perception(),
             strategy=_strategy(),
@@ -602,8 +597,8 @@ class TestLearningAgentComprehensive:
             "procedure_name": "",
             "procedure_steps": [],
         }
-        agent = LearningAgent(llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.learn(
             user_input_text="test",
             perception=_perception(),
             strategy=_strategy(),
@@ -624,8 +619,8 @@ class TestLearningAgentComprehensive:
             "procedure_name": "",
             "procedure_steps": [],
         }
-        agent = LearningAgent(llm, memory, logger)
-        agent.run(
+        agent = PinocchioAgent(llm, memory, logger)
+        agent.learn(
             user_input_text="test",
             perception=_perception(),
             strategy=_strategy(),
@@ -637,15 +632,15 @@ class TestLearningAgentComprehensive:
 
 
 # =====================================================================
-# MetaReflectionAgent
+# Meta-Reflect Skill
 # =====================================================================
-class TestMetaReflectionComprehensive:
+class TestMetaReflectSkillComprehensive:
     """Extended meta-reflection tests: trigger logic, empty memory, content."""
 
     def test_trigger_at_zero_episodes_returns_false(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
-        agent = MetaReflectionAgent(llm, memory, logger)
-        assert agent.should_trigger() is False
+        agent = PinocchioAgent(llm, memory, logger)
+        assert agent.should_meta_reflect() is False
 
     def test_trigger_at_5_episodes(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
@@ -657,8 +652,8 @@ class TestMetaReflectionComprehensive:
                 strategy_used="s",
                 outcome_score=7,
             ))
-        agent = MetaReflectionAgent(llm, memory, logger)
-        assert agent.should_trigger() is True
+        agent = PinocchioAgent(llm, memory, logger)
+        assert agent.should_meta_reflect() is True
 
     def test_trigger_at_7_episodes_returns_false(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
@@ -670,8 +665,8 @@ class TestMetaReflectionComprehensive:
                 strategy_used="s",
                 outcome_score=7,
             ))
-        agent = MetaReflectionAgent(llm, memory, logger)
-        assert agent.should_trigger() is False
+        agent = PinocchioAgent(llm, memory, logger)
+        assert agent.should_meta_reflect() is False
 
     def test_trigger_at_10_episodes(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
@@ -683,8 +678,8 @@ class TestMetaReflectionComprehensive:
                 strategy_used="s",
                 outcome_score=7,
             ))
-        agent = MetaReflectionAgent(llm, memory, logger)
-        assert agent.should_trigger() is True
+        agent = PinocchioAgent(llm, memory, logger)
+        assert agent.should_meta_reflect() is True
 
     def test_run_with_populated_memory(self, tmp_path):
         llm, memory, logger = _mock_infra(tmp_path)
@@ -710,8 +705,8 @@ class TestMetaReflectionComprehensive:
             "knowledge_gaps": ["video understanding"],
             "analysis": "Steady improvement across QA tasks.",
         }
-        agent = MetaReflectionAgent(llm, memory, logger)
-        result = agent.run()
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.meta_reflect()
         assert isinstance(result, MetaReflectionResult)
         assert "timeout" in result.recurring_errors
         assert "creative_writing" in result.priority_improvements
@@ -731,7 +726,7 @@ class TestMetaReflectionComprehensive:
             "knowledge_gaps": [],
             "analysis": "No data yet.",
         }
-        agent = MetaReflectionAgent(llm, memory, logger)
-        result = agent.run()
+        agent = PinocchioAgent(llm, memory, logger)
+        result = agent.meta_reflect()
         assert result.recurring_errors == []
         assert result.raw_analysis == "No data yet."

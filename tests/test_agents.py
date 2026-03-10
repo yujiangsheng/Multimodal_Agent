@@ -6,12 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pinocchio.agents.perception_agent import PerceptionAgent
-from pinocchio.agents.strategy_agent import StrategyAgent
-from pinocchio.agents.execution_agent import ExecutionAgent
-from pinocchio.agents.evaluation_agent import EvaluationAgent
-from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent, _DEFAULT_META_REFLECT_INTERVAL
+from pinocchio.agents.unified_agent import PinocchioAgent, _DEFAULT_META_REFLECT_INTERVAL
 from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.models.enums import (
     AgentRole,
@@ -47,11 +42,7 @@ def memory(tmp_data_dir):
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestPerceptionAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = PerceptionAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.PERCEPTION
-
+class TestPerceptionSkill:
     def test_run_classifies_task(self, mock_llm, memory, logger):
         mock_llm.ask_json.return_value = {
             "task_type": "code_generation",
@@ -60,9 +51,9 @@ class TestPerceptionAgent:
             "ambiguities": [],
             "analysis": "User wants code.",
         }
-        agent = PerceptionAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         user_input = MultimodalInput(text="Write a Python function to sort a list")
-        result = agent.run(user_input=user_input)
+        result = agent.perceive(user_input=user_input)
 
         assert result.task_type == TaskType.CODE_GENERATION
         assert result.complexity == Complexity.MODERATE
@@ -79,9 +70,9 @@ class TestPerceptionAgent:
             "ambiguities": ["unclear which part to focus on"],
             "analysis": "Multimodal image analysis requested.",
         }
-        agent = PerceptionAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         user_input = MultimodalInput(text="What's in this photo?", image_paths=["photo.jpg"])
-        result = agent.run(user_input=user_input)
+        result = agent.perceive(user_input=user_input)
 
         assert Modality.TEXT in result.modalities
         assert Modality.IMAGE in result.modalities
@@ -101,8 +92,8 @@ class TestPerceptionAgent:
             "ambiguities": [],
             "analysis": "Simple code request.",
         }
-        agent = PerceptionAgent(mock_llm, memory, logger)
-        result = agent.run(user_input=MultimodalInput(text="Write hello world"))
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.perceive(user_input=MultimodalInput(text="Write hello world"))
 
         assert len(result.similar_episodes) >= 1
         assert "Use type hints" in result.relevant_lessons
@@ -113,11 +104,7 @@ class TestPerceptionAgent:
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestStrategyAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = StrategyAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.STRATEGY
-
+class TestStrategySkill:
     def test_run_produces_strategy(self, mock_llm, memory, logger):
         mock_llm.ask_json.return_value = {
             "selected_strategy": "direct_qa",
@@ -129,13 +116,13 @@ class TestStrategyAgent:
             "is_novel": True,
             "analysis": "Direct approach is best.",
         }
-        agent = StrategyAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         perception = PerceptionResult(
             task_type=TaskType.QUESTION_ANSWERING,
             modalities=[Modality.TEXT],
             complexity=Complexity.SIMPLE,
         )
-        result = agent.run(perception=perception)
+        result = agent.strategize(perception=perception)
 
         assert result.selected_strategy == "direct_qa"
         assert result.is_novel is True
@@ -160,12 +147,12 @@ class TestStrategyAgent:
             "is_novel": False,
             "analysis": "Reusing proven strategy.",
         }
-        agent = StrategyAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         perception = PerceptionResult(
             task_type=TaskType.QUESTION_ANSWERING,
             modalities=[Modality.TEXT],
         )
-        result = agent.run(perception=perception)
+        result = agent.strategize(perception=perception)
 
         assert result.is_novel is False
         # The LLM prompt should have included the procedure context
@@ -179,15 +166,11 @@ class TestStrategyAgent:
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestExecutionAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = ExecutionAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.EXECUTION
-
+class TestExecutionSkill:
     def test_run_text_only(self, mock_llm, memory, logger):
         mock_llm.ask.return_value = "The answer is 42."
-        agent = ExecutionAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="What is the answer?"),
             perception=PerceptionResult(task_type=TaskType.QUESTION_ANSWERING, modalities=[Modality.TEXT]),
             strategy=StrategyResult(selected_strategy="direct", is_novel=False),
@@ -199,7 +182,7 @@ class TestExecutionAgent:
     def test_run_with_images_uses_vision(self, mock_llm, memory, logger, tmp_path):
         mock_llm.chat.return_value = "I see a cat in the image."
         mock_llm.build_vision_message.return_value = {"role": "user", "content": []}
-        agent = ExecutionAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         # Create a real tiny PNG so _encode_image can read it
         img_path = tmp_path / "cat.png"
         img_path.write_bytes(
@@ -208,7 +191,7 @@ class TestExecutionAgent:
             b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
             b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
         )
-        result = agent.run(
+        result = agent.execute(
             user_input=MultimodalInput(text="What's in this?", image_paths=[str(img_path)]),
             perception=PerceptionResult(modalities=[Modality.TEXT, Modality.IMAGE]),
             strategy=StrategyResult(selected_strategy="vision_qa", is_novel=True),
@@ -219,8 +202,8 @@ class TestExecutionAgent:
 
     def test_run_includes_strategy_metadata(self, mock_llm, memory, logger):
         mock_llm.ask.return_value = "Response"
-        agent = ExecutionAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.execute(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(selected_strategy="test_strat", is_novel=True),
@@ -234,11 +217,7 @@ class TestExecutionAgent:
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestEvaluationAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = EvaluationAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.EVALUATION
-
+class TestEvaluationSkill:
     def test_run_produces_evaluation(self, mock_llm, memory, logger):
         mock_llm.ask_json.return_value = {
             "task_completion": "complete",
@@ -252,8 +231,8 @@ class TestEvaluationAgent:
             "incompleteness_details": "",
             "analysis": "Good quality output.",
         }
-        agent = EvaluationAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(task_type=TaskType.QUESTION_ANSWERING),
             strategy=StrategyResult(selected_strategy="direct"),
@@ -278,8 +257,8 @@ class TestEvaluationAgent:
             "cross_modal_coherence": 5,
             "analysis": "Failed badly.",
         }
-        agent = EvaluationAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -295,11 +274,7 @@ class TestEvaluationAgent:
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestLearningAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = LearningAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.LEARNING
-
+class TestLearningSkill:
     def test_run_stores_episode(self, mock_llm, memory, logger):
         mock_llm.ask_json.return_value = {
             "new_lessons": ["Always validate input"],
@@ -311,8 +286,8 @@ class TestLearningAgent:
             "procedure_name": "",
             "procedure_steps": [],
         }
-        agent = LearningAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.learn(
             user_input_text="test question",
             perception=PerceptionResult(
                 task_type=TaskType.QUESTION_ANSWERING,
@@ -337,8 +312,8 @@ class TestLearningAgent:
             "procedure_name": "structured_analysis_v1",
             "procedure_steps": ["parse", "analyse", "synthesise"],
         }
-        agent = LearningAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.learn(
             user_input_text="analyse this data",
             perception=PerceptionResult(task_type=TaskType.ANALYSIS, modalities=[Modality.TEXT]),
             strategy=StrategyResult(selected_strategy="structured_analysis"),
@@ -366,8 +341,8 @@ class TestLearningAgent:
             "procedure_name": "bad_proc",
             "procedure_steps": ["step1"],
         }
-        agent = LearningAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.learn(
             user_input_text="test",
             perception=PerceptionResult(task_type=TaskType.ANALYSIS),
             strategy=StrategyResult(selected_strategy="bad"),
@@ -389,8 +364,8 @@ class TestLearningAgent:
             "procedure_name": "",
             "procedure_steps": [],
         }
-        agent = LearningAgent(mock_llm, memory, logger)
-        result = agent.run(
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.learn(
             user_input_text="solve this integral",
             perception=PerceptionResult(task_type=TaskType.ANALYSIS),
             strategy=StrategyResult(),
@@ -405,23 +380,19 @@ class TestLearningAgent:
 # ──────────────────────────────────────────────────────────────────
 
 
-class TestMetaReflectionAgent:
-    def test_role(self, mock_llm, memory, logger):
-        agent = MetaReflectionAgent(mock_llm, memory, logger)
-        assert agent.role == AgentRole.META_REFLECTION
-
+class TestMetaReflectSkill:
     def test_should_trigger_on_interval(self, mock_llm, memory, logger):
-        agent = MetaReflectionAgent(mock_llm, memory, logger)
-        assert agent.should_trigger() is False  # 0 episodes
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        assert agent.should_meta_reflect() is False  # 0 episodes
         for i in range(_DEFAULT_META_REFLECT_INTERVAL):
             memory.store_episode(EpisodicRecord(outcome_score=7))
-        assert agent.should_trigger() is True
+        assert agent.should_meta_reflect() is True
 
     def test_should_not_trigger_off_interval(self, mock_llm, memory, logger):
-        agent = MetaReflectionAgent(mock_llm, memory, logger)
+        agent = PinocchioAgent(mock_llm, memory, logger)
         for _ in range(_DEFAULT_META_REFLECT_INTERVAL + 1):
             memory.store_episode(EpisodicRecord())
-        assert agent.should_trigger() is False  # 6 is not divisible by 5
+        assert agent.should_meta_reflect() is False  # 6 is not divisible by 5
 
     def test_run_produces_meta_reflection(self, mock_llm, memory, logger):
         # Seed some data
@@ -444,8 +415,8 @@ class TestMetaReflectionAgent:
             "knowledge_gaps": ["literary techniques"],
             "analysis": "Overall positive trend with room to grow.",
         }
-        agent = MetaReflectionAgent(mock_llm, memory, logger)
-        result = agent.run()
+        agent = PinocchioAgent(mock_llm, memory, logger)
+        result = agent.meta_reflect()
 
         assert "timeout" in result.recurring_errors
         assert "code_generation" in result.strength_domains

@@ -336,8 +336,8 @@ class TestCrossCuttingIntegration:
         llm.max_tokens = 4096
         logger = PinocchioLogger()
 
-        # Simulate learning agent storing a procedure
-        from pinocchio.agents.learning_agent import LearningAgent
+        # Simulate learning skill storing a procedure
+        from pinocchio.agents.unified_agent import PinocchioAgent
         llm.ask_json.return_value = {
             "new_lessons": ["decompose problem"],
             "strategy_refinements": "",
@@ -348,8 +348,8 @@ class TestCrossCuttingIntegration:
             "procedure_name": "decompose_qa",
             "procedure_steps": ["decompose", "solve parts", "synthesize"],
         }
-        learning = LearningAgent(llm, mm, logger)
-        learning.run(
+        learning = PinocchioAgent(llm, mm, logger)
+        learning.learn(
             user_input_text="Complex question",
             perception=PerceptionResult(
                 task_type=TaskType.QUESTION_ANSWERING,
@@ -364,8 +364,7 @@ class TestCrossCuttingIntegration:
             evaluation=EvaluationResult(output_quality=9),
         )
 
-        # Now verify strategy agent can recall it
-        from pinocchio.agents.strategy_agent import StrategyAgent
+        # Now verify strategy skill can recall it
         llm.ask_json.return_value = {
             "selected_strategy": "decompose_qa",
             "basis": "proven procedure",
@@ -376,8 +375,8 @@ class TestCrossCuttingIntegration:
             "is_novel": False,
             "analysis": "Reusing proven decompose_qa",
         }
-        strategy = StrategyAgent(llm, mm, logger)
-        result = strategy.run(perception=PerceptionResult(
+        strategy = PinocchioAgent(llm, mm, logger)
+        result = strategy.strategize(perception=PerceptionResult(
             task_type=TaskType.QUESTION_ANSWERING,
             modalities=[Modality.TEXT],
         ))
@@ -415,9 +414,9 @@ class TestCrossCuttingIntegration:
             "analysis": "Code gen task",
         }
 
-        from pinocchio.agents.perception_agent import PerceptionAgent
-        pa = PerceptionAgent(llm, mm, logger)
-        result = pa.run(user_input=MultimodalInput(text="Write a sort function"))
+        from pinocchio.agents.unified_agent import PinocchioAgent
+        pa = PinocchioAgent(llm, mm, logger)
+        result = pa.perceive(user_input=MultimodalInput(text="Write a sort function"))
         assert len(result.similar_episodes) > 0
         assert len(result.relevant_lessons) > 0
 
@@ -430,8 +429,8 @@ class TestCrossCuttingIntegration:
         llm.max_tokens = 4096
         logger = PinocchioLogger()
 
-        from pinocchio.agents.learning_agent import LearningAgent
-        la = LearningAgent(llm, mm, logger)
+        from pinocchio.agents.unified_agent import PinocchioAgent
+        la = PinocchioAgent(llm, mm, logger)
 
         for i in range(5):
             llm.ask_json.return_value = {
@@ -444,7 +443,7 @@ class TestCrossCuttingIntegration:
                 "procedure_name": "",
                 "procedure_steps": [],
             }
-            la.run(
+            la.learn(
                 user_input_text=f"Question {i}",
                 perception=PerceptionResult(
                     task_type=TaskType.QUESTION_ANSWERING,

@@ -130,6 +130,29 @@ class SemanticMemory:
         """Return entries with confidence above a threshold."""
         return [e for e in self._entries if e.confidence >= threshold]
 
+    def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[SemanticEntry]:
+        """Return entries most similar to *query_embedding* by cosine similarity.
+
+        Only entries that have a stored embedding and whose similarity
+        exceeds *threshold* are considered.
+        """
+        from pinocchio.utils.llm_client import EmbeddingClient
+
+        scored: list[tuple[SemanticEntry, float]] = []
+        for entry in self._entries:
+            if not entry.embedding:
+                continue
+            sim = EmbeddingClient.cosine_similarity(query_embedding, entry.embedding)
+            if sim >= threshold:
+                scored.append((entry, sim))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [e for e, _ in scored[:limit]]
+
     # ------------------------------------------------------------------
     # Update & Merge
     # ------------------------------------------------------------------

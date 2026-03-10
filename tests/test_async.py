@@ -109,17 +109,17 @@ class TestOrchestratorAsyncChat:
 
         agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
 
-        # Stub all cognitive agents
+        # Stub all cognitive skills
         from pinocchio.models.schemas import (
             PerceptionResult, StrategyResult, EvaluationResult, LearningResult,
         )
-        agent.perception.run = MagicMock(return_value=PerceptionResult())
-        agent.strategy.run = MagicMock(return_value=StrategyResult())
-        agent.execution.run = MagicMock(
+        agent.agent.perceive = MagicMock(return_value=PerceptionResult())
+        agent.agent.strategize = MagicMock(return_value=StrategyResult())
+        agent.agent.execute = MagicMock(
             return_value=AgentMessage(content="async result", confidence=0.8))
-        agent.evaluation.run = MagicMock(return_value=EvaluationResult())
-        agent.learning.run = MagicMock(return_value=LearningResult())
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+        agent.agent.evaluate = MagicMock(return_value=EvaluationResult())
+        agent.agent.learn = MagicMock(return_value=LearningResult())
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
         result = await agent.async_chat("hello async")
         assert result == "async result"
@@ -134,13 +134,13 @@ class TestOrchestratorAsyncChat:
         )
 
         agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
-        agent.perception.run = MagicMock(return_value=PerceptionResult())
-        agent.strategy.run = MagicMock(return_value=StrategyResult())
-        agent.execution.run = MagicMock(
+        agent.agent.perceive = MagicMock(return_value=PerceptionResult())
+        agent.agent.strategize = MagicMock(return_value=StrategyResult())
+        agent.agent.execute = MagicMock(
             return_value=AgentMessage(content="ok", confidence=0.8))
-        agent.evaluation.run = MagicMock(return_value=EvaluationResult())
-        agent.learning.run = MagicMock(return_value=LearningResult())
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+        agent.agent.evaluate = MagicMock(return_value=EvaluationResult())
+        agent.agent.learn = MagicMock(return_value=LearningResult())
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
         results = await asyncio.gather(
             agent.async_chat("msg1"),

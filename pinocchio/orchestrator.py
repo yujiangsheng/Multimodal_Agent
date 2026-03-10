@@ -1,44 +1,37 @@
 """Pinocchio Orchestrator — the conductor of the cognitive loop.
 
-This is the top-level agent that coordinates all sub-agents through the
-complete self-evolving cognitive cycle:
+This module contains the :class:`Pinocchio` class, the **sole public
+entry point** for users of the library.  It coordinates the unified
+:class:`~pinocchio.agents.unified_agent.PinocchioAgent` through the
+complete self-evolving cognitive cycle::
 
     PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → (META-REFLECT)
 
-It also manages the multimodal processor pool, user model, and provides
-the external API that callers interact with.
+Responsibilities
+----------------
+1. **Cognitive-loop coordination** — drive all 6 phases for every
+   interaction, passing context between skill methods.
+2. **Fast-path optimisation** — short text-only messages skip the
+   heavy phases and go directly to a single LLM call.
+3. **Multimodal routing** — detect which modality processors are
+   needed, run them in parallel (or sequentially), and inject the
+   resulting text descriptions into the execution context.
+4. **Response completeness** — an outer retry loop re-invokes
+   ``continue_response()`` if the evaluator flags the output as
+   incomplete (up to ``MAX_COMPLETION_RETRIES``).
+5. **Background learning** — LEARN + META-REFLECT + memory
+   consolidation run in a daemon thread so the user gets their
+   response immediately after EVALUATE.
+6. **Session management** — conversation history, interaction
+   counter, adaptive ``UserModel``, and ``reset()`` / ``status()``.
+7. **Error recovery** — catch exceptions in any phase and return
+   a safe fallback response.
 
-Skills / Capabilities (as the Orchestrator)
-───────────────────────────────────────────
-1. **Full Cognitive Loop Coordination**
-   Drive the 6-phase self-learning cycle for every user interaction,
-   ensuring no phase is skipped.
-
-2. **Sub-Agent Dispatch**
-   Route work to the appropriate sub-agent at each phase and pass
-   context between them fluently.
-
-3. **Multimodal Router**
-   Automatically detect which modality processors are needed and
-   invoke them via the Execution phase.
-
-4. **User Model Management**
-   Maintain and update the adaptive ``UserModel`` across interactions,
-   tracking expertise level, communication style, and interests.
-
-5. **Session Management**
-   Track interaction count, manage conversation history, and provide
-   a clean external API (``chat()``, ``reset()``).
-
-6. **Meta-Reflection Scheduling**
-   Trigger the MetaReflectionAgent at the configured interval.
-
-7. **Error Recovery**
-   Catch and recover from failures in any sub-agent, logging the error
-   and falling back to a safe response.
-
-8. **Memory Persistence**
-   Ensure all memory stores are saved after each interaction.
+Example
+-------
+>>> from pinocchio import Pinocchio
+>>> agent = Pinocchio()
+>>> print(agent.chat("Explain quantum entanglement simply."))
 """
 
 from __future__ import annotations
@@ -46,15 +39,11 @@ from __future__ import annotations
 import asyncio
 import threading
 import traceback
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from pinocchio.agents.perception_agent import PerceptionAgent
-from pinocchio.agents.strategy_agent import StrategyAgent
-from pinocchio.agents.execution_agent import ExecutionAgent
-from pinocchio.agents.evaluation_agent import EvaluationAgent
-from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent
+from pinocchio.agents.unified_agent import PinocchioAgent
 from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.models.enums import AgentRole
 from pinocchio.models.schemas import (
@@ -66,19 +55,61 @@ from pinocchio.multimodal.text_processor import TextProcessor
 from pinocchio.multimodal.vision_processor import VisionProcessor
 from pinocchio.multimodal.audio_processor import AudioProcessor
 from pinocchio.multimodal.video_processor import VideoProcessor
-from pinocchio.utils.llm_client import LLMClient
+from pinocchio.tools import ToolExecutor, ToolRegistry
+from pinocchio.utils.context_manager import ContextManager
+from pinocchio.utils.input_guard import InputGuard
+from pinocchio.utils.llm_client import EmbeddingClient, LLMClient
 from pinocchio.utils.logger import PinocchioLogger
 from pinocchio.utils.resource_monitor import ResourceMonitor
+from pinocchio.utils.response_cache import ResponseCache
 
 
 class Pinocchio:
     """Top-level orchestrator for the self-evolving multimodal agent.
+
+    This is the **only class** most users need to interact with.  It
+    provides a simple ``chat()`` / ``async_chat()`` interface that
+    internally drives the full 6-phase cognitive loop.
+
+    Parameters
+    ----------
+    model : str
+        LLM model name for the Ollama backend (default ``qwen3-vl:4b``).
+    api_key : str | None
+        API key for the OpenAI-compatible endpoint.
+    base_url : str | None
+        Base URL for the LLM API (default ``http://localhost:11434/v1``).
+    data_dir : str
+        Directory where persistent memory JSON files are stored.
+    verbose : bool
+        If ``True``, log hardware info and phase transitions to stdout.
+    max_workers : int | None
+        Max parallel threads for modality preprocessing.  ``None`` =
+        auto-detect from hardware.
+    parallel_modalities : bool
+        Whether to preprocess modalities (vision/audio/video) in
+        parallel threads.
+    meta_reflect_interval : int
+        Number of interactions between meta-reflection triggers.
+    num_ctx : int
+        Ollama context-window size (lower = less KV-cache memory).
 
     Usage
     -----
     >>> agent = Pinocchio()
     >>> response = agent.chat("Explain quantum entanglement simply.")
     >>> print(response)
+
+    Multimodal::
+
+        >>> response = agent.chat(
+        ...     "What's in this image?",
+        ...     image_paths=["photo.jpg"],
+        ... )
+
+    Async::
+
+        >>> response = await agent.async_chat("Hello!")
     """
 
     GREETING = (
@@ -104,16 +135,26 @@ class Pinocchio:
         self.memory = MemoryManager(data_dir=data_dir)
         self.logger = PinocchioLogger()
 
-        # Cognitive-loop sub-agents
-        self.perception = PerceptionAgent(self.llm, self.memory, self.logger)
-        self.strategy = StrategyAgent(self.llm, self.memory, self.logger)
-        self.execution = ExecutionAgent(self.llm, self.memory, self.logger)
-        self.evaluation = EvaluationAgent(self.llm, self.memory, self.logger)
-        self.learning = LearningAgent(self.llm, self.memory, self.logger)
-        self.meta_reflection = MetaReflectionAgent(
+        # Unified cognitive agent (all 6 skills in one)
+        self.agent = PinocchioAgent(
             self.llm, self.memory, self.logger,
             meta_reflect_interval=meta_reflect_interval,
         )
+
+        # Tool framework
+        self.tool_registry = ToolRegistry()
+        self.tool_registry.register_defaults()
+        self.tool_executor = ToolExecutor(self.tool_registry)
+        self.agent.set_tools(self.tool_registry, self.tool_executor)
+
+        # Embedding client for vector-based memory search
+        try:
+            self._embedding_client = EmbeddingClient(
+                api_key=api_key, base_url=base_url,
+            )
+            self.memory.set_embedding_client(self._embedding_client)
+        except Exception:
+            self._embedding_client = None
 
         # Multimodal processor pool
         self.text_proc = TextProcessor(self.llm, self.memory, self.logger)
@@ -126,6 +167,18 @@ class Pinocchio:
         self._resources = self._resource_monitor.snapshot()
         self._max_workers = max_workers or self._resources.recommended_workers
         self._parallel_modalities = parallel_modalities
+
+        # Input guard (prompt injection defense)
+        self._input_guard = InputGuard()
+
+        # Context window manager (summarise old turns)
+        self._context_manager = ContextManager(
+            self.llm,
+            max_context_tokens=int(num_ctx * 0.6),  # leave 40 % for response
+        )
+
+        # Response cache (avoid redundant LLM calls)
+        self._response_cache = ResponseCache(capacity=256, ttl_seconds=600)
 
         # Session state
         self.user_model = UserModel()
@@ -185,6 +238,16 @@ class Pinocchio:
             f"Interaction #{interaction_num}",
         )
 
+        # ── Input validation & sanitisation ──
+        if text:
+            guard_result = self._input_guard.validate(text)
+            if guard_result.threats:
+                self.logger.warn(
+                    AgentRole.ORCHESTRATOR,
+                    f"Input guard: {guard_result.threat_summary}",
+                )
+            text = guard_result.sanitised_text
+
         user_input = MultimodalInput(
             text=text,
             image_paths=image_paths or [],
@@ -242,12 +305,88 @@ class Pinocchio:
         """Return the initialization greeting."""
         return self.GREETING
 
+    # ------------------------------------------------------------------
+    # Streaming API
+    # ------------------------------------------------------------------
+
+    def chat_stream(
+        self,
+        text: str | None = None,
+        *,
+        image_paths: list[str] | None = None,
+        audio_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+    ) -> Generator[str, None, None]:
+        """Stream the agent's response token-by-token.
+
+        Uses the fast path (simple text-only, ≤ FAST_PATH_MAX_LENGTH).
+        For multimodal or complex input, falls back to yielding the full
+        ``chat()`` response as a single chunk.
+        """
+        with self._lock:
+            self._interaction_count += 1
+            interaction_num = self._interaction_count
+            self.user_model.interaction_count = interaction_num
+
+        # ── Input validation ──
+        if text:
+            guard_result = self._input_guard.validate(text)
+            if guard_result.threats:
+                self.logger.warn(
+                    AgentRole.ORCHESTRATOR,
+                    f"Input guard: {guard_result.threat_summary}",
+                )
+            text = guard_result.sanitised_text
+
+        user_input = MultimodalInput(
+            text=text,
+            image_paths=image_paths or [],
+            audio_paths=audio_paths or [],
+            video_paths=video_paths or [],
+        )
+
+        # Only stream the fast-path (simple text-only messages)
+        if self._is_simple_input(user_input):
+            if user_input.text:
+                self.memory.working.add_conversation_turn("user", user_input.text)
+
+            _FAST_SYSTEM = (
+                "You are Pinocchio, a helpful multimodal AI assistant that learns "
+                "and evolves. Respond directly to the user. Be thorough, accurate, "
+                "and helpful. Write in the same language the user uses."
+            )
+            messages: list[dict[str, Any]] = self._context_manager.build_messages(
+                _FAST_SYSTEM, self.conversation_history,
+            )
+            messages.append({"role": "user", "content": user_input.text or ""})
+
+            collected: list[str] = []
+            for chunk in self.llm.chat_stream(messages):
+                collected.append(chunk)
+                yield chunk
+
+            full_text = "".join(collected)
+            self.memory.working.add_conversation_turn("assistant", full_text[:500])
+            with self._lock:
+                if text:
+                    self.conversation_history.append({"role": "user", "content": text})
+                self.conversation_history.append(
+                    {"role": "assistant", "content": full_text}
+                )
+        else:
+            # Fallback: run full cognitive loop and yield result as one chunk
+            response = self.chat(text, image_paths=image_paths,
+                                 audio_paths=audio_paths, video_paths=video_paths)
+            yield response
+
     def reset(self) -> None:
         """Reset session state (keeps persistent memory)."""
         self.conversation_history.clear()
         self._interaction_count = 0
         self.user_model = UserModel()
         self.memory.reset_working_memory()
+        self._context_manager.reset()
+        self._response_cache.clear()
 
     def status(self) -> dict[str, Any]:
         """Return a summary of the agent's current state."""
@@ -263,6 +402,8 @@ class Pinocchio:
             },
             "resources": self._resources.to_dict(),
             "working_memory": self.memory.working.summary(),
+            "context_manager": self._context_manager.stats(),
+            "response_cache": self._response_cache.stats(),
         }
 
     # ------------------------------------------------------------------
@@ -295,20 +436,26 @@ class Pinocchio:
 
         user_text = user_input.text or ""
 
-        # Build minimal context from working memory (recent conversation)
-        conv_items = self.memory.working.get_conversation()[-6:]
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": (
-                "You are Pinocchio, a helpful multimodal AI assistant that learns "
-                "and evolves. Respond directly to the user. Be thorough, accurate, "
-                "and helpful. Write in the same language the user uses."
-            )},
-        ]
-        for item in conv_items:
-            messages.append({"role": item.source, "content": item.content})
+        # Build context-managed message list
+        _FAST_SYSTEM = (
+            "You are Pinocchio, a helpful multimodal AI assistant that learns "
+            "and evolves. Respond directly to the user. Be thorough, accurate, "
+            "and helpful. Write in the same language the user uses."
+        )
+        messages = self._context_manager.build_messages(
+            _FAST_SYSTEM, self.conversation_history,
+        )
         messages.append({"role": "user", "content": user_text})
 
-        response_text = self.llm.chat(messages)
+        # ── Cache lookup ──
+        cache_key = ResponseCache.make_key(messages)
+        cached = self._response_cache.get(cache_key)
+        if cached is not None:
+            self.logger.log(AgentRole.ORCHESTRATOR, "Fast path — cache hit")
+            response_text = cached
+        else:
+            response_text = self.llm.chat(messages)
+            self._response_cache.put(cache_key, response_text)
 
         # Store in working memory
         self.memory.working.add_conversation_turn("assistant", response_text[:500])
@@ -322,7 +469,7 @@ class Pinocchio:
             role="assistant",
             content=response_text,
             confidence=0.8,
-            metadata={"fast_path": True},
+            metadata={"fast_path": True, "cache_hit": cached is not None},
         )
 
     def _run_cognitive_loop(self, user_input: MultimodalInput) -> AgentMessage:
@@ -352,19 +499,19 @@ class Pinocchio:
 
         # ── Phase 1: PERCEIVE ──
         # Classify the task, detect modalities, assess complexity & confidence
-        perception = self.perception.run(
+        perception = self.agent.perceive(
             user_input=user_input,
             modality_context=modality_context,
         )
 
         # ── Phase 2: STRATEGIZE ──
         # Select (or construct) the best approach; retrieve procedural memory
-        strategy = self.strategy.run(perception=perception)
+        strategy = self.agent.strategize(perception=perception)
 
         # ── Phase 3: EXECUTE ──
         # Generate the user-facing response; includes auto-continuation if
         # the LLM hits its token limit (up to _MAX_AUTO_CONTINUATIONS rounds)
-        response = self.execution.run(
+        response = self.agent.execute(
             user_input=user_input,
             perception=perception,
             strategy=strategy,
@@ -373,7 +520,7 @@ class Pinocchio:
 
         # ── Phase 4: EVALUATE ──
         # Score quality, check completeness, identify improvement areas
-        evaluation = self.evaluation.run(
+        evaluation = self.agent.evaluate(
             user_input=user_input,
             perception=perception,
             strategy=strategy,
@@ -395,14 +542,14 @@ class Pinocchio:
             )
 
             try:
-                response = self.execution.continue_response(
+                response = self.agent.continue_response(
                     user_input=user_input,
                     partial_response=response.content,
                     incompleteness_details=evaluation.incompleteness_details,
                 )
 
                 # Re-evaluate the continued response
-                evaluation = self.evaluation.run(
+                evaluation = self.agent.evaluate(
                     user_input=user_input,
                     perception=perception,
                     strategy=strategy,
@@ -460,7 +607,7 @@ class Pinocchio:
         def _background() -> None:
             try:
                 # Phase 5: LEARN
-                self.learning.run(
+                self.agent.learn(
                     user_input_text=user_text,
                     perception=perception,
                     strategy=strategy,
@@ -468,12 +615,12 @@ class Pinocchio:
                 )
 
                 # Phase 6: META-REFLECT (periodic)
-                if self.meta_reflection.should_trigger():
+                if self.agent.should_meta_reflect():
                     self.logger.log(
                         AgentRole.ORCHESTRATOR,
                         "Meta-reflection triggered — running higher-order analysis",
                     )
-                    meta = self.meta_reflection.run()
+                    meta = self.agent.meta_reflect()
                     if meta.priority_improvements:
                         self.logger.log(
                             AgentRole.ORCHESTRATOR,

@@ -1,27 +1,40 @@
 """Pinocchio Web Demo — FastAPI backend.
 
-Provides a REST API for the frontend to interact with the Pinocchio
-multimodal agent.  Serves the single-page frontend from ``web/static/``.
+Provides a REST API and serves the single-page chat UI from
+``web/static/index.html``.  The frontend supports text input,
+multimodal file uploads (images / audio / video), real-time status
+monitoring, and memory exploration.
 
 Endpoints
 ---------
-GET  /                  — Serve the frontend
-POST /api/chat          — Send a message (with optional file uploads)
-GET  /api/status        — Agent state summary
-POST /api/reset         — Reset session (persistent memory kept)
-GET  /api/memory/episodes   — All episodic memory records
-GET  /api/memory/knowledge  — All semantic knowledge entries
-GET  /api/memory/procedures — All procedural memory entries
-GET  /api/memory/working    — Current working memory items
-GET  /api/memory/trend      — Improvement trend over time
+==========================  ====  ============================================
+Path                        Verb  Description
+==========================  ====  ============================================
+``/``                       GET   Serve the frontend (``index.html``)
+``/api/chat``               POST  Send a message (form-data with file uploads)
+``/api/status``             GET   Agent state summary (JSON)
+``/api/reset``              POST  Reset session (persistent memory kept)
+``/api/memory/episodes``    GET   All episodic memory records
+``/api/memory/knowledge``   GET   All semantic knowledge entries
+``/api/memory/procedures``  GET   All procedural memory entries
+``/api/memory/working``     GET   Current working-memory items
+``/api/memory/trend``       GET   Improvement trend + per-episode timeline
+==========================  ====  ============================================
 
 Usage
 -----
+::
+
+    # Install web extras
+    pip install -e ".[web]"
+
+    # Start the server (default: http://localhost:8000)
     python -m web.app
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -32,6 +45,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import StreamingResponse
 
 from config import PinocchioConfig
 from pinocchio import Pinocchio
@@ -112,6 +126,36 @@ async def chat(
                 os.unlink(p)
             except OSError:
                 pass
+
+
+# ── Streaming Chat (SSE) ─────────────────────────────────────
+
+@app.get("/api/chat/stream")
+async def chat_stream(text: str = ""):
+    """Server-Sent Events endpoint for streaming text-only responses."""
+    import asyncio
+
+    def _generate():
+        for chunk in agent.chat_stream(text or None):
+            # SSE format: each event is "data: <payload>\n\n"
+            yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    async def _async_generate():
+        loop = asyncio.get_event_loop()
+        gen = _generate()
+        while True:
+            try:
+                event = await loop.run_in_executor(None, next, gen)
+                yield event
+            except StopIteration:
+                break
+
+    return StreamingResponse(
+        _async_generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Status & Reset ────────────────────────────────────────────

@@ -179,23 +179,22 @@ class TestOrchestratorEdgeCases:
 
         agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
         # Stub all cognitive agents
-        for a_name in ("perception", "strategy", "execution", "evaluation", "learning"):
-            a = getattr(agent, a_name)
-            if a_name == "execution":
-                a.run = MagicMock(return_value=AgentMessage(content="ok", confidence=0.5))
-            elif a_name == "perception":
+        for a_name in ("perceive", "strategize", "execute", "evaluate", "learn"):
+            if a_name == "execute":
+                setattr(agent.agent, a_name, MagicMock(return_value=AgentMessage(content="ok", confidence=0.5)))
+            elif a_name == "perceive":
                 from pinocchio.models.schemas import PerceptionResult
-                a.run = MagicMock(return_value=PerceptionResult())
-            elif a_name == "strategy":
+                setattr(agent.agent, a_name, MagicMock(return_value=PerceptionResult()))
+            elif a_name == "strategize":
                 from pinocchio.models.schemas import StrategyResult
-                a.run = MagicMock(return_value=StrategyResult())
-            elif a_name == "evaluation":
+                setattr(agent.agent, a_name, MagicMock(return_value=StrategyResult()))
+            elif a_name == "evaluate":
                 from pinocchio.models.schemas import EvaluationResult
-                a.run = MagicMock(return_value=EvaluationResult())
-            elif a_name == "learning":
+                setattr(agent.agent, a_name, MagicMock(return_value=EvaluationResult()))
+            elif a_name == "learn":
                 from pinocchio.models.schemas import LearningResult
-                a.run = MagicMock(return_value=LearningResult())
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+                setattr(agent.agent, a_name, MagicMock(return_value=LearningResult()))
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
         # Call with no text and no media
         result = agent.chat(None)
@@ -208,23 +207,22 @@ class TestOrchestratorEdgeCases:
         from pinocchio.orchestrator import Pinocchio
 
         agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
-        for a_name in ("perception", "strategy", "execution", "evaluation", "learning"):
-            a = getattr(agent, a_name)
-            if a_name == "execution":
-                a.run = MagicMock(return_value=AgentMessage(content="handled", confidence=0.5))
-            elif a_name == "perception":
+        for a_name in ("perceive", "strategize", "execute", "evaluate", "learn"):
+            if a_name == "execute":
+                setattr(agent.agent, a_name, MagicMock(return_value=AgentMessage(content="handled", confidence=0.5)))
+            elif a_name == "perceive":
                 from pinocchio.models.schemas import PerceptionResult
-                a.run = MagicMock(return_value=PerceptionResult())
-            elif a_name == "strategy":
+                setattr(agent.agent, a_name, MagicMock(return_value=PerceptionResult()))
+            elif a_name == "strategize":
                 from pinocchio.models.schemas import StrategyResult
-                a.run = MagicMock(return_value=StrategyResult())
-            elif a_name == "evaluation":
+                setattr(agent.agent, a_name, MagicMock(return_value=StrategyResult()))
+            elif a_name == "evaluate":
                 from pinocchio.models.schemas import EvaluationResult
-                a.run = MagicMock(return_value=EvaluationResult())
-            elif a_name == "learning":
+                setattr(agent.agent, a_name, MagicMock(return_value=EvaluationResult()))
+            elif a_name == "learn":
                 from pinocchio.models.schemas import LearningResult
-                a.run = MagicMock(return_value=LearningResult())
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+                setattr(agent.agent, a_name, MagicMock(return_value=LearningResult()))
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
         long_text = "x" * 200_000
         result = agent.chat(long_text)
@@ -236,7 +234,7 @@ class TestOrchestratorEdgeCases:
         from pinocchio.orchestrator import Pinocchio
 
         agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
-        agent.perception.run = MagicMock(side_effect=RuntimeError("LLM exploded"))
+        agent.agent.perceive = MagicMock(side_effect=RuntimeError("LLM exploded"))
 
         result = agent.chat("test")
         assert "错误" in result or "抱歉" in result
@@ -256,15 +254,15 @@ class TestOrchestratorEdgeCases:
                 counter["n"] += 1
             return PerceptionResult()
 
-        agent.perception.run = MagicMock(side_effect=_mock_perception)
-        agent.strategy.run = MagicMock(
+        agent.agent.perceive = MagicMock(side_effect=_mock_perception)
+        agent.agent.strategize = MagicMock(
             return_value=MagicMock(selected_strategy="test", is_novel=False))
-        agent.execution.run = MagicMock(
+        agent.agent.execute = MagicMock(
             return_value=AgentMessage(content="ok", confidence=0.8))
-        agent.evaluation.run = MagicMock(
+        agent.agent.evaluate = MagicMock(
             return_value=MagicMock(output_quality=8, task_completion="complete"))
-        agent.learning.run = MagicMock(return_value=MagicMock())
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+        agent.agent.learn = MagicMock(return_value=MagicMock())
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
         errors = []
         results = [None] * 5

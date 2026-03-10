@@ -53,9 +53,10 @@ class EpisodicRecord:
     error_patterns: list[str] = field(default_factory=list)
     improvement_notes: str = ""
     memory_tier: MemoryTier = MemoryTier.LONG_TERM  # temporal axis
+    embedding: list[float] = field(default_factory=list)  # optional vector
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "episode_id": self.episode_id,
             "timestamp": self.timestamp,
             "task_type": self.task_type.value,
@@ -68,6 +69,9 @@ class EpisodicRecord:
             "improvement_notes": self.improvement_notes,
             "memory_tier": self.memory_tier.value,
         }
+        if self.embedding:
+            d["embedding"] = self.embedding
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpisodicRecord":
@@ -95,9 +99,10 @@ class SemanticEntry:
     )
     updated_at: str = ""
     memory_tier: MemoryTier = MemoryTier.LONG_TERM  # temporal axis
+    embedding: list[float] = field(default_factory=list)  # optional vector
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "entry_id": self.entry_id,
             "domain": self.domain,
             "knowledge": self.knowledge,
@@ -107,6 +112,9 @@ class SemanticEntry:
             "updated_at": self.updated_at,
             "memory_tier": self.memory_tier.value,
         }
+        if self.embedding:
+            d["embedding"] = self.embedding
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticEntry":

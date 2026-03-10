@@ -59,34 +59,34 @@ def agent_verbose(_patch_llm, tmp_path):
 
 
 def _stub_cognitive_agents(agent: Pinocchio) -> None:
-    """Stub all cognitive agents to return valid objects without LLM calls."""
-    agent.perception.run = MagicMock(return_value=PerceptionResult(
+    """Stub all cognitive skills to return valid objects without LLM calls."""
+    agent.agent.perceive = MagicMock(return_value=PerceptionResult(
         task_type=TaskType.QUESTION_ANSWERING,
         modalities=[Modality.TEXT],
         complexity=Complexity.MODERATE,
         confidence=ConfidenceLevel.HIGH,
         raw_analysis="Mocked perception.",
     ))
-    agent.strategy.run = MagicMock(return_value=StrategyResult(
+    agent.agent.strategize = MagicMock(return_value=StrategyResult(
         selected_strategy="mock_strategy",
         fusion_strategy=FusionStrategy.LATE_FUSION,
         is_novel=False,
     ))
-    agent.execution.run = MagicMock(return_value=AgentMessage(
+    agent.agent.execute = MagicMock(return_value=AgentMessage(
         content="Mocked response.",
         confidence=0.9,
         metadata={"strategy": "mock_strategy"},
     ))
-    agent.evaluation.run = MagicMock(return_value=EvaluationResult(
+    agent.agent.evaluate = MagicMock(return_value=EvaluationResult(
         output_quality=8,
         strategy_effectiveness=8,
         task_completion="complete",
     ))
-    agent.learning.run = MagicMock(return_value=LearningResult(
+    agent.agent.learn = MagicMock(return_value=LearningResult(
         new_lessons=["mock lesson"],
         episodic_update="stored",
     ))
-    agent.meta_reflection.should_trigger = MagicMock(return_value=False)
+    agent.agent.should_meta_reflect = MagicMock(return_value=False)
 
 
 # =====================================================================
@@ -99,11 +99,11 @@ class TestCognitiveLoop:
         _stub_cognitive_agents(agent)
         response = agent.chat("Hello, Pinocchio!")
         assert response == "Mocked response."
-        agent.perception.run.assert_called_once()
-        agent.strategy.run.assert_called_once()
-        agent.execution.run.assert_called_once()
-        agent.evaluation.run.assert_called_once()
-        agent.learning.run.assert_called_once()
+        agent.agent.perceive.assert_called_once()
+        agent.agent.strategize.assert_called_once()
+        agent.agent.execute.assert_called_once()
+        agent.agent.evaluate.assert_called_once()
+        agent.agent.learn.assert_called_once()
 
     def test_interaction_count_increments(self, agent):
         _stub_cognitive_agents(agent)
@@ -130,23 +130,23 @@ class TestCognitiveLoop:
 
     def test_meta_reflection_triggered(self, agent):
         _stub_cognitive_agents(agent)
-        agent.meta_reflection.should_trigger = MagicMock(return_value=True)
-        agent.meta_reflection.run = MagicMock(return_value=MagicMock(
+        agent.agent.should_meta_reflect = MagicMock(return_value=True)
+        agent.agent.meta_reflect = MagicMock(return_value=MagicMock(
             priority_improvements=["improve creative writing"],
         ))
         agent.chat("Trigger meta")
-        agent.meta_reflection.run.assert_called_once()
+        agent.agent.meta_reflect.assert_called_once()
 
     def test_meta_reflection_not_triggered(self, agent):
         _stub_cognitive_agents(agent)
-        agent.meta_reflection.should_trigger = MagicMock(return_value=False)
-        agent.meta_reflection.run = MagicMock()
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
+        agent.agent.meta_reflect = MagicMock()
         agent.chat("No meta")
-        agent.meta_reflection.run.assert_not_called()
+        agent.agent.meta_reflect.assert_not_called()
 
     def test_error_in_cognitive_loop_returns_fallback(self, agent):
         """If any agent raises, the orchestrator returns a safe error message."""
-        agent.perception.run = MagicMock(side_effect=RuntimeError("LLM down"))
+        agent.agent.perceive = MagicMock(side_effect=RuntimeError("LLM down"))
         response = agent.chat("Crash test")
         assert "抱歉" in response or "错误" in response
         assert agent._interaction_count == 1  # still counted

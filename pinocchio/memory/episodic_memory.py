@@ -176,6 +176,25 @@ class EpisodicMemory:
         scored.sort(key=lambda x: (x[1], x[0].timestamp), reverse=True)
         return [ep for ep, _ in scored[:limit]]
 
+    def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[EpisodicRecord]:
+        """Return episodes most similar to *query_embedding* by cosine similarity."""
+        from pinocchio.utils.llm_client import EmbeddingClient
+
+        scored: list[tuple[EpisodicRecord, float]] = []
+        for ep in self._episodes:
+            if not ep.embedding:
+                continue
+            sim = EmbeddingClient.cosine_similarity(query_embedding, ep.embedding)
+            if sim >= threshold:
+                scored.append((ep, sim))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [ep for ep, _ in scored[:limit]]
+
     # ------------------------------------------------------------------
     # Analytics
     # ------------------------------------------------------------------

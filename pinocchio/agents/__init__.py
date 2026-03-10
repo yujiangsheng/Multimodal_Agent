@@ -1,32 +1,30 @@
-"""Pinocchio cognitive-loop sub-agents.
+"""Pinocchio cognitive-loop agents.
 
-Six agents form the self-evolving cognitive loop:
+:class:`PinocchioAgent` is the unified cognitive agent that consolidates
+all six phases of the self-evolving cognitive loop into a single class
+with distinct skill methods:
 
-1. :class:`PerceptionAgent`     — PERCEIVE: analyse & classify input
-2. :class:`StrategyAgent`       — STRATEGIZE: select approach & plan
-3. :class:`ExecutionAgent`      — EXECUTE: generate the response
-4. :class:`EvaluationAgent`     — EVALUATE: score quality & effectiveness
-5. :class:`LearningAgent`       — LEARN: extract lessons, update memory
-6. :class:`MetaReflectionAgent` — META-REFLECT: periodic higher-order analysis
+1. :meth:`~PinocchioAgent.perceive`      — PERCEIVE: analyse & classify input
+2. :meth:`~PinocchioAgent.strategize`    — STRATEGIZE: select approach & plan
+3. :meth:`~PinocchioAgent.execute`       — EXECUTE: generate the response
+4. :meth:`~PinocchioAgent.evaluate`      — EVALUATE: score quality & effectiveness
+5. :meth:`~PinocchioAgent.learn`         — LEARN: extract lessons, update memory
+6. :meth:`~PinocchioAgent.meta_reflect`  — META-REFLECT: periodic higher-order analysis
 
-All inherit from :class:`BaseAgent` which provides shared LLM, memory,
-and logging access.
+Inheritance::
+
+    BaseAgent (ABC)
+    ├── PinocchioAgent     — cognitive loop (6 skills)
+    ├── TextProcessor      — multimodal: text
+    ├── VisionProcessor    — multimodal: image
+    ├── AudioProcessor     — multimodal: audio
+    └── VideoProcessor     — multimodal: video
 """
 
 from pinocchio.agents.base_agent import BaseAgent
-from pinocchio.agents.perception_agent import PerceptionAgent
-from pinocchio.agents.strategy_agent import StrategyAgent
-from pinocchio.agents.execution_agent import ExecutionAgent
-from pinocchio.agents.evaluation_agent import EvaluationAgent
-from pinocchio.agents.learning_agent import LearningAgent
-from pinocchio.agents.meta_reflection_agent import MetaReflectionAgent
+from pinocchio.agents.unified_agent import PinocchioAgent
 
 __all__ = [
     "BaseAgent",
-    "PerceptionAgent",
-    "StrategyAgent",
-    "ExecutionAgent",
-    "EvaluationAgent",
-    "LearningAgent",
-    "MetaReflectionAgent",
+    "PinocchioAgent",
 ]

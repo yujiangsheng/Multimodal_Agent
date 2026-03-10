@@ -1,22 +1,50 @@
 """Memory Manager — unified façade over the dual-axis memory system.
 
-Pinocchio's memory has two orthogonal classification axes:
+Pinocchio's memory architecture is modelled after human cognition and
+has two orthogonal classification axes:
 
 **Content axis** (what is stored):
-  - Episodic  — concrete past interaction traces
-  - Semantic  — distilled, generalisable knowledge
-  - Procedural — reusable action templates & strategies
+
+=============  ======================  ====================================
+Store          Human analogy           Stores
+=============  ======================  ====================================
+Episodic       "I remember that time…" Full interaction traces (intent,
+                                        strategy, outcome, lessons)
+Semantic       "I know that…"          Distilled, generalisable knowledge
+                                        extracted from multiple episodes
+Procedural     "I know how to…"        Reusable step-by-step action
+                                        templates with success-rate tracking
+=============  ======================  ====================================
 
 **Temporal axis** (how long it lives):
-  - Working    — current session only; volatile, capacity-limited
-  - Long-term  — cross-session; persisted to disk, subject to decay
-  - Persistent — permanent; core knowledge, never pruned
 
-This manager coordinates reads/writes across all stores and provides
-consolidation logic that promotes entries between temporal tiers.
+===========  ============  ===============================================
+Tier         Lifetime       Description
+===========  ============  ===============================================
+Working      Session        Volatile conversation buffer (in-RAM, FIFO)
+Long-term    Cross-session  JSON-persisted, subject to decay / pruning
+Persistent   Permanent      High-value entries auto-promoted, never pruned
+===========  ============  ===============================================
+
+This manager coordinates reads/writes across all stores and provides:
+
+- Unified ``recall()`` that searches all content + temporal stores at once
+- ``store_episode()`` that auto-flags domains for knowledge synthesis
+- ``consolidate()`` that promotes high-value entries to the persistent tier
+- ``improvement_trend()`` analytics over a sliding window
+- ``summary()`` for the status dashboard
+
+Example
+-------
+>>> mm = MemoryManager(data_dir="data")
+>>> context = mm.recall(TaskType.CODE_GENERATION, [Modality.TEXT])
+>>> mm.store_episode(episode)
+>>> promoted = mm.consolidate()
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from pinocchio.memory.episodic_memory import EpisodicMemory
 from pinocchio.memory.semantic_memory import SemanticMemory
@@ -29,21 +57,26 @@ from pinocchio.models.schemas import (
     ProceduralEntry,
 )
 
+if TYPE_CHECKING:
+    from pinocchio.utils.llm_client import EmbeddingClient
+
 
 class MemoryManager:
     """Unified façade for Pinocchio's dual-axis memory system.
 
-    Content axis:  episodic · semantic · procedural
-    Temporal axis: working  · long-term · persistent
+    Provides a single entry point for all memory operations.  The four
+    underlying stores are accessible as attributes:
 
-    Skills / Capabilities:
-      - Coordinate reads/writes across all memory stores
-      - Provide a single *recall* method that searches all stores
-      - Manage working memory for current-session context
-      - Trigger knowledge synthesis when a domain reaches the episode threshold
-      - Consolidate memories: working→long-term, long-term→persistent
-      - Compute cross-memory analytics (improvement trends, strategy rankings)
-      - Ensure data consistency across memory stores
+    - ``self.episodic``   — :class:`EpisodicMemory`  (content: episodic)
+    - ``self.semantic``   — :class:`SemanticMemory`   (content: semantic)
+    - ``self.procedural`` — :class:`ProceduralMemory` (content: procedural)
+    - ``self.working``    — :class:`WorkingMemory`    (temporal: working)
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the three JSON persistence files are stored.
+        Created automatically if it does not exist.
     """
 
     def __init__(self, data_dir: str = "data") -> None:
@@ -55,8 +88,15 @@ class MemoryManager:
         # ── Temporal-axis: working memory (volatile, in-RAM) ──
         self.working = WorkingMemory(capacity=50)
 
+        # Optional embedding client for vector search
+        self._embedding_client: EmbeddingClient | None = None
+
         # Domains pending synthesis — consumed by LearningAgent
         self._pending_synthesis: list[str] = []
+
+    def set_embedding_client(self, client: EmbeddingClient) -> None:
+        """Attach an embedding client for vector-based memory recall."""
+        self._embedding_client = client
 
     # ------------------------------------------------------------------
     # Unified recall (both axes)
@@ -87,6 +127,24 @@ class MemoryManager:
         procedure = self.procedural.best_procedure(task_type)
         lessons = self.episodic.recent_lessons(limit=5)
 
+        # Vector search enrichment (when embedding client is available)
+        if self._embedding_client and keyword:
+            try:
+                q_emb = self._embedding_client.embed(keyword)
+                emb_episodes = self.episodic.search_by_embedding(q_emb, limit=3)
+                emb_knowledge = self.semantic.search_by_embedding(q_emb, limit=3)
+                # Merge without duplicates
+                existing_ep_ids = {ep.episode_id for ep in similar}
+                for ep in emb_episodes:
+                    if ep.episode_id not in existing_ep_ids:
+                        similar.append(ep)
+                existing_se_ids = {e.entry_id for e in knowledge}
+                for e in emb_knowledge:
+                    if e.entry_id not in existing_se_ids:
+                        knowledge.append(e)
+            except Exception:
+                pass  # embedding service unavailable — fall back to keyword
+
         # Temporal-axis enrichment
         persistent_knowledge = self.semantic.get_persistent()[:5]
         working_context = self.working.format_conversation_context(max_turns=5)
@@ -106,6 +164,15 @@ class MemoryManager:
 
     def store_episode(self, episode: EpisodicRecord) -> None:
         """Store an episode and flag the domain for synthesis if threshold is reached."""
+        # Auto-embed if embedding client is available
+        if self._embedding_client and not episode.embedding:
+            try:
+                text = f"{episode.user_intent} {episode.strategy_used} {' '.join(episode.lessons)}"
+                vec = self._embedding_client.embed(text)
+                if isinstance(vec, list) and all(isinstance(v, (int, float)) for v in vec):
+                    episode.embedding = vec
+            except Exception:
+                pass
         self.episodic.add(episode)
         domain = episode.task_type.value
         domain_episodes = self.episodic.search_by_task_type(episode.task_type, limit=100)
@@ -124,6 +191,14 @@ class MemoryManager:
         return domains
 
     def store_knowledge(self, entry: SemanticEntry) -> None:
+        # Auto-embed if embedding client is available
+        if self._embedding_client and not entry.embedding:
+            try:
+                vec = self._embedding_client.embed(entry.knowledge)
+                if isinstance(vec, list) and all(isinstance(v, (int, float)) for v in vec):
+                    entry.embedding = vec
+            except Exception:
+                pass
         self.semantic.add(entry)
 
     def store_procedure(self, entry: ProceduralEntry) -> None:

@@ -23,6 +23,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from collections.abc import Generator
+
 import httpx
 import openai
 
@@ -140,6 +142,51 @@ class LLMClient:
     def last_finish_reason(self) -> str:
         """Return the finish_reason from the most recent completion."""
         return getattr(self, "_last_finish_reason", "stop")
+
+    # ------------------------------------------------------------------
+    # Streaming completion
+    # ------------------------------------------------------------------
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> Generator[str, None, None]:
+        """Stream a chat completion, yielding text chunks as they arrive.
+
+        After the generator is exhausted, ``last_finish_reason`` reflects
+        the final finish reason from the stream.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens or self.max_tokens,
+            "stream": True,
+            "extra_body": {"options": {"num_ctx": self.num_ctx}},
+        }
+        stream = self._client.chat.completions.create(**kwargs)
+        in_think = False
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                text = delta.content
+                # Strip <think>…</think> incrementally
+                if "<think>" in text:
+                    in_think = True
+                if in_think:
+                    if "</think>" in text:
+                        text = text.split("</think>", 1)[1]
+                        in_think = False
+                    else:
+                        continue
+                if text:
+                    yield text
+            finish = chunk.choices[0].finish_reason if chunk.choices else None
+            if finish:
+                self._last_finish_reason = finish
 
     # ------------------------------------------------------------------
     # Convenience helpers
@@ -354,3 +401,67 @@ class AsyncLLMClient:
     build_video_message = LLMClient.build_video_message
     _resolve_audio_url = LLMClient._resolve_audio_url
     _audio_format = LLMClient._audio_format
+
+
+# ======================================================================
+# Embedding client (vector search support)
+# ======================================================================
+
+_DEFAULT_EMBEDDING_MODEL = os.getenv("PINOCCHIO_EMBEDDING_MODEL", "nomic-embed-text")
+
+
+class EmbeddingClient:
+    """Generate text embeddings via an OpenAI-compatible embeddings API.
+
+    Default backend: ``nomic-embed-text`` running on local Ollama server.
+    """
+
+    def __init__(
+        self,
+        model: str = _DEFAULT_EMBEDDING_MODEL,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        self.model = model
+        resolved_key = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
+        resolved_url = base_url or _DEFAULT_BASE_URL
+
+        http_client = httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=10.0),
+        )
+        self._client = openai.OpenAI(
+            api_key=resolved_key,
+            base_url=resolved_url,
+            http_client=http_client,
+        )
+
+    def embed(self, text: str) -> list[float]:
+        """Return the embedding vector for a single text string."""
+        response = self._client.embeddings.create(
+            model=self.model,
+            input=text,
+        )
+        return response.data[0].embedding
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Return embedding vectors for a batch of texts."""
+        if not texts:
+            return []
+        response = self._client.embeddings.create(
+            model=self.model,
+            input=texts,
+        )
+        # Sort by index to preserve input order
+        sorted_data = sorted(response.data, key=lambda d: d.index)
+        return [d.embedding for d in sorted_data]
+
+    @staticmethod
+    def cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors."""
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = sum(x * x for x in a) ** 0.5
+        norm_b = sum(x * x for x in b) ** 0.5
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)

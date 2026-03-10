@@ -102,13 +102,16 @@ def main() -> None:
         # Parse multimodal flags
         text, images, audios, videos = _parse_input(user_input)
 
-        response = agent.chat(
+        # Stream output for text-only, use full response for multimodal
+        print("\n🤖 Pinocchio: ", end="", flush=True)
+        for chunk in agent.chat_stream(
             text or None,
             image_paths=images or None,
             audio_paths=audios or None,
             video_paths=videos or None,
-        )
-        print(f"\n🤖 Pinocchio: {response}")
+        ):
+            print(chunk, end="", flush=True)
+        print()  # newline after stream finishes
 
 
 if __name__ == "__main__":

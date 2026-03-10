@@ -23,7 +23,7 @@ from pinocchio.memory.memory_manager import MemoryManager
 from pinocchio.memory.episodic_memory import EpisodicMemory
 from pinocchio.memory.semantic_memory import SemanticMemory
 from pinocchio.memory.procedural_memory import ProceduralMemory
-from pinocchio.agents.evaluation_agent import EvaluationAgent
+from pinocchio.agents.unified_agent import PinocchioAgent
 from pinocchio.utils.logger import PinocchioLogger
 
 
@@ -351,64 +351,64 @@ class TestMemoryManagerDualAxis:
 
 
 # =====================================================================
-# EvaluationAgent completeness detection
+# Evaluation completeness detection
 # =====================================================================
 
 class TestEvaluationCompletenessDetection:
-    """Test the heuristic completeness checking in EvaluationAgent."""
+    """Test the heuristic completeness checking in PinocchioAgent."""
 
     def test_heuristic_empty_response(self):
-        ok, reason = EvaluationAgent._heuristic_completeness_check("")
+        ok, reason = PinocchioAgent._heuristic_completeness_check("")
         assert ok is False
         assert "empty" in reason.lower()
 
     def test_heuristic_whitespace_only(self):
-        ok, reason = EvaluationAgent._heuristic_completeness_check("   ")
+        ok, reason = PinocchioAgent._heuristic_completeness_check("   ")
         assert ok is False
         assert "empty" in reason.lower()
 
     def test_heuristic_short_response(self):
-        ok, reason = EvaluationAgent._heuristic_completeness_check("Hi")
+        ok, reason = PinocchioAgent._heuristic_completeness_check("Hi")
         assert ok is False
         assert "short" in reason.lower()
 
     def test_heuristic_unbalanced_code_fences(self):
         text = "Here is the code:\n```python\ndef foo():\n    pass"
-        ok, reason = EvaluationAgent._heuristic_completeness_check(text)
+        ok, reason = PinocchioAgent._heuristic_completeness_check(text)
         assert ok is False
         assert "code" in reason.lower()
 
     def test_heuristic_balanced_code_fences_ok(self):
         text = "Here is the code:\n```python\ndef foo():\n    pass\n```\nDone."
-        ok, reason = EvaluationAgent._heuristic_completeness_check(text)
+        ok, reason = PinocchioAgent._heuristic_completeness_check(text)
         assert ok is True
 
     def test_heuristic_no_terminal_punctuation(self):
         # Long enough (> 200 chars) but ends with a special char not in terminal set
         text = "x" * 201 + "\x00"
-        ok, reason = EvaluationAgent._heuristic_completeness_check(text)
+        ok, reason = PinocchioAgent._heuristic_completeness_check(text)
         assert ok is False
         assert "punctuation" in reason.lower()
 
     def test_heuristic_proper_terminal_punctuation(self):
         text = "This is a complete response that answers the question properly."
-        ok, reason = EvaluationAgent._heuristic_completeness_check(text)
+        ok, reason = PinocchioAgent._heuristic_completeness_check(text)
         assert ok is True
         assert reason == ""
 
     def test_heuristic_short_but_valid_10_plus(self):
-        ok, reason = EvaluationAgent._heuristic_completeness_check("Enough now.")
+        ok, reason = PinocchioAgent._heuristic_completeness_check("Enough now.")
         assert ok is True
 
     def test_heuristic_ends_with_word(self):
         """Responses ending with a normal word should pass."""
-        ok, reason = EvaluationAgent._heuristic_completeness_check(
+        ok, reason = PinocchioAgent._heuristic_completeness_check(
             "x" * 201 + "complete"
         )
         assert ok is True
 
     def test_heuristic_chinese_punctuation(self):
-        ok, reason = EvaluationAgent._heuristic_completeness_check(
+        ok, reason = PinocchioAgent._heuristic_completeness_check(
             "\u8fd9\u662f\u4e00\u4e2a\u5b8c\u6574\u7684\u56de\u7b54\u3002"
         )
         assert ok is True
@@ -427,10 +427,10 @@ class TestEvaluationCompletenessDetection:
         }
         memory = MemoryManager(data_dir=str(tmp_path))
         logger = PinocchioLogger()
-        agent = EvaluationAgent(llm, memory, logger)
+        agent = PinocchioAgent(llm, memory, logger)
 
         # Very short response — heuristic will override LLM
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
@@ -454,9 +454,9 @@ class TestEvaluationCompletenessDetection:
         }
         memory = MemoryManager(data_dir=str(tmp_path))
         logger = PinocchioLogger()
-        agent = EvaluationAgent(llm, memory, logger)
+        agent = PinocchioAgent(llm, memory, logger)
 
-        result = agent.run(
+        result = agent.evaluate(
             user_input=MultimodalInput(text="test"),
             perception=PerceptionResult(),
             strategy=StrategyResult(),
