@@ -18,5 +18,6 @@ are implementation details and should not normally be imported directly.
 """
 
 from pinocchio.orchestrator import Pinocchio
+from pinocchio.tools import Tool, ToolRegistry, ToolExecutor, tool
 
-__all__ = ["Pinocchio"]
+__all__ = ["Pinocchio", "Tool", "ToolRegistry", "ToolExecutor", "tool"]

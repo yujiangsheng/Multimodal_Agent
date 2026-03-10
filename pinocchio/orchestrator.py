@@ -39,8 +39,9 @@ from __future__ import annotations
 import asyncio
 import threading
 import traceback
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 from pinocchio.agents.unified_agent import PinocchioAgent
@@ -55,8 +56,9 @@ from pinocchio.multimodal.text_processor import TextProcessor
 from pinocchio.multimodal.vision_processor import VisionProcessor
 from pinocchio.multimodal.audio_processor import AudioProcessor
 from pinocchio.multimodal.video_processor import VideoProcessor
-from pinocchio.tools import ToolExecutor, ToolRegistry
+from pinocchio.tools import Tool, ToolExecutor, ToolRegistry, tool as tool_decorator
 from pinocchio.utils.context_manager import ContextManager
+from pinocchio.utils.conversation_store import ConversationStore
 from pinocchio.utils.input_guard import InputGuard
 from pinocchio.utils.llm_client import EmbeddingClient, LLMClient
 from pinocchio.utils.logger import PinocchioLogger
@@ -188,6 +190,18 @@ class Pinocchio:
         self._lock = threading.Lock()  # protects session state mutations
         self._post_response_thread: threading.Thread | None = None
 
+        # Conversation persistence (SQLite)
+        self._conversation_store = ConversationStore(
+            Path(data_dir) / "conversations.db"
+        )
+        session = self._conversation_store.create_session()
+        self._current_session_id: str = session.id
+        self._last_user_msg_id: int | None = None
+        self._last_asst_msg_id: int | None = None
+
+        # Remove leftover empty sessions from earlier restarts / tests
+        self._conversation_store.purge_empty_sessions(keep_id=session.id)
+
         # Log detected hardware
         if verbose:
             r = self._resources
@@ -267,11 +281,31 @@ class Pinocchio:
 
         # Store in conversation history
         with self._lock:
+            user_msg_id = None
             if text:
-                self.conversation_history.append({"role": "user", "content": text})
-            self.conversation_history.append(
-                {"role": "assistant", "content": response.content}
+                user_msg_id = self._conversation_store.add_message(
+                    self._current_session_id, "user", text,
+                )
+                self.conversation_history.append(
+                    {"role": "user", "content": text, "id": user_msg_id}
+                )
+            asst_msg_id = self._conversation_store.add_message(
+                self._current_session_id, "assistant", response.content,
             )
+            self.conversation_history.append(
+                {"role": "assistant", "content": response.content, "id": asst_msg_id}
+            )
+            self._last_user_msg_id = user_msg_id
+            self._last_asst_msg_id = asst_msg_id
+
+            # Auto-title from first user message
+            if text and interaction_num == 1:
+                title = text[:40].replace("\n", " ")
+                if len(text) > 40:
+                    title += "…"
+                self._conversation_store.update_session_title(
+                    self._current_session_id, title,
+                )
 
         return response.content
 
@@ -353,7 +387,8 @@ class Pinocchio:
             _FAST_SYSTEM = (
                 "You are Pinocchio, a helpful multimodal AI assistant that learns "
                 "and evolves. Respond directly to the user. Be thorough, accurate, "
-                "and helpful. Write in the same language the user uses."
+                "and helpful. Write in the same language the user uses.\n\n"
+                f"[USER PROFILE] {self._user_model_context()}"
             )
             messages: list[dict[str, Any]] = self._context_manager.build_messages(
                 _FAST_SYSTEM, self.conversation_history,
@@ -368,11 +403,22 @@ class Pinocchio:
             full_text = "".join(collected)
             self.memory.working.add_conversation_turn("assistant", full_text[:500])
             with self._lock:
+                user_msg_id = None
                 if text:
-                    self.conversation_history.append({"role": "user", "content": text})
-                self.conversation_history.append(
-                    {"role": "assistant", "content": full_text}
+                    user_msg_id = self._conversation_store.add_message(
+                        self._current_session_id, "user", text,
+                    )
+                    self.conversation_history.append(
+                        {"role": "user", "content": text, "id": user_msg_id}
+                    )
+                asst_msg_id = self._conversation_store.add_message(
+                    self._current_session_id, "assistant", full_text,
                 )
+                self.conversation_history.append(
+                    {"role": "assistant", "content": full_text, "id": asst_msg_id}
+                )
+                self._last_user_msg_id = user_msg_id
+                self._last_asst_msg_id = asst_msg_id
         else:
             # Fallback: run full cognitive loop and yield result as one chunk
             response = self.chat(text, image_paths=image_paths,
@@ -387,12 +433,18 @@ class Pinocchio:
         self.memory.reset_working_memory()
         self._context_manager.reset()
         self._response_cache.clear()
+        # Start a fresh session
+        session = self._conversation_store.create_session()
+        self._current_session_id = session.id
+        self._last_user_msg_id = None
+        self._last_asst_msg_id = None
 
     def status(self) -> dict[str, Any]:
         """Return a summary of the agent's current state."""
         self._resources = self._resource_monitor.snapshot(refresh=True)
         return {
             "interaction_count": self._interaction_count,
+            "session_id": self._current_session_id,
             "memory_summary": self.memory.summary(),
             "improvement_trend": self.memory.improvement_trend(),
             "user_model": {
@@ -405,6 +457,254 @@ class Pinocchio:
             "context_manager": self._context_manager.stats(),
             "response_cache": self._response_cache.stats(),
         }
+
+    # ------------------------------------------------------------------
+    # Session management
+    # ------------------------------------------------------------------
+
+    @property
+    def current_session_id(self) -> str:
+        """Return the active session's ID."""
+        return self._current_session_id
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Return all stored sessions (newest first)."""
+        return [s.to_dict() for s in self._conversation_store.list_sessions()]
+
+    def new_session(self, title: str = "新对话") -> dict[str, Any]:
+        """Create a new session and switch to it."""
+        self.conversation_history.clear()
+        self._interaction_count = 0
+        self.memory.reset_working_memory()
+        self._context_manager.reset()
+        self._response_cache.clear()
+        session = self._conversation_store.create_session(title)
+        self._current_session_id = session.id
+        self._last_user_msg_id = None
+        self._last_asst_msg_id = None
+        return session.to_dict()
+
+    def switch_session(self, session_id: str) -> dict[str, Any] | None:
+        """Switch to an existing session, loading its messages."""
+        session = self._conversation_store.get_session(session_id)
+        if session is None:
+            return None
+
+        # Load messages into conversation_history
+        stored = self._conversation_store.get_messages(session_id)
+        self.conversation_history = [
+            {"role": m.role, "content": m.content, "id": m.id}
+            for m in stored
+        ]
+        self._current_session_id = session_id
+        self._interaction_count = sum(
+            1 for m in stored if m.role == "user"
+        )
+        self.user_model.interaction_count = self._interaction_count
+        self.memory.reset_working_memory()
+        self._context_manager.reset()
+        self._response_cache.clear()
+
+        # Re-seed working memory with recent turns
+        for msg in self.conversation_history[-12:]:
+            self.memory.working.add_conversation_turn(
+                msg["role"], msg["content"][:500],
+            )
+
+        return session.to_dict()
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session.  Cannot delete the active session."""
+        if session_id == self._current_session_id:
+            return False
+        return self._conversation_store.delete_session(session_id)
+
+    def rename_session(self, session_id: str, title: str) -> bool:
+        """Rename a session."""
+        return self._conversation_store.update_session_title(session_id, title)
+
+    def get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Return all messages for a session."""
+        return [
+            m.to_dict()
+            for m in self._conversation_store.get_messages(session_id)
+        ]
+
+    # ------------------------------------------------------------------
+    # Regenerate / Edit
+    # ------------------------------------------------------------------
+
+    def regenerate(self) -> str | None:
+        """Remove the last assistant response and regenerate it.
+
+        Returns the new response text, or ``None`` if there is nothing
+        to regenerate.
+        """
+        # Find the last assistant message
+        last_asst_idx = None
+        for i in range(len(self.conversation_history) - 1, -1, -1):
+            if self.conversation_history[i]["role"] == "assistant":
+                last_asst_idx = i
+                break
+        if last_asst_idx is None:
+            return None
+
+        # Find the preceding user message
+        user_text = None
+        for i in range(last_asst_idx - 1, -1, -1):
+            if self.conversation_history[i]["role"] == "user":
+                user_text = self.conversation_history[i]["content"]
+                break
+        if user_text is None:
+            return None
+
+        # Remove assistant message from history and store
+        removed = self.conversation_history.pop(last_asst_idx)
+        if "id" in removed:
+            self._conversation_store.delete_messages_after(
+                self._current_session_id,
+                removed["id"] - 1,
+            )
+
+        # Re-run the cognitive loop (user message is already in history)
+        user_input = MultimodalInput(text=user_text)
+        try:
+            response = self._run_cognitive_loop(user_input)
+        except Exception as exc:
+            response = AgentMessage(
+                content="重新生成失败，请重试。", confidence=0.0,
+            )
+
+        # Save new assistant message
+        asst_msg_id = self._conversation_store.add_message(
+            self._current_session_id, "assistant", response.content,
+        )
+        self.conversation_history.append(
+            {"role": "assistant", "content": response.content, "id": asst_msg_id}
+        )
+        self._last_asst_msg_id = asst_msg_id
+        return response.content
+
+    def edit_and_regenerate(self, message_id: int, new_text: str) -> str | None:
+        """Edit a user message and regenerate everything after it.
+
+        Parameters
+        ----------
+        message_id : int
+            Database ID of the message to edit.
+        new_text : str
+            New content for the message.
+
+        Returns
+        -------
+        str | None
+            The new assistant response, or ``None`` on failure.
+        """
+        # Find the message in conversation_history
+        target_idx = None
+        for i, msg in enumerate(self.conversation_history):
+            if msg.get("id") == message_id and msg["role"] == "user":
+                target_idx = i
+                break
+        if target_idx is None:
+            return None
+
+        # Update in store
+        self._conversation_store.update_message(message_id, new_text)
+        # Delete all messages after it in the store
+        self._conversation_store.delete_messages_after(
+            self._current_session_id, message_id,
+        )
+
+        # Truncate in-memory history
+        self.conversation_history = self.conversation_history[: target_idx + 1]
+        self.conversation_history[target_idx]["content"] = new_text
+
+        # Regenerate
+        user_input = MultimodalInput(text=new_text)
+        try:
+            response = self._run_cognitive_loop(user_input)
+        except Exception:
+            response = AgentMessage(
+                content="重新生成失败，请重试。", confidence=0.0,
+            )
+
+        asst_msg_id = self._conversation_store.add_message(
+            self._current_session_id, "assistant", response.content,
+        )
+        self.conversation_history.append(
+            {"role": "assistant", "content": response.content, "id": asst_msg_id}
+        )
+        self._last_asst_msg_id = asst_msg_id
+        return response.content
+
+    # ------------------------------------------------------------------
+    # Tool management
+    # ------------------------------------------------------------------
+
+    def register_tool(
+        self,
+        func: Callable[..., str],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        parameters: dict[str, Any] | None = None,
+    ) -> Tool:
+        """Register a custom tool function.
+
+        Example::
+
+            def weather(city: str) -> str:
+                return f"Sunny in {city}"
+
+            agent.register_tool(weather, description="Get weather info")
+        """
+        return self.tool_registry.register_function(
+            func, name=name, description=description, parameters=parameters,
+        )
+
+    def unregister_tool(self, name: str) -> bool:
+        """Remove a tool by name."""
+        return self.tool_registry.unregister(name)
+
+    def enable_tool(self, name: str) -> bool:
+        """Re-enable a disabled tool."""
+        return self.tool_registry.enable(name)
+
+    def disable_tool(self, name: str) -> bool:
+        """Temporarily disable a tool without removing it."""
+        return self.tool_registry.disable(name)
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        """Return info about all registered tools."""
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "enabled": t.enabled,
+                "parameters": t.parameters,
+            }
+            for t in self.tool_registry._tools.values()
+        ]
+
+    def tool_stats(self) -> dict[str, Any]:
+        """Return usage metrics for tool invocations."""
+        return self.tool_executor.stats()
+
+    # ------------------------------------------------------------------
+    # User model context
+    # ------------------------------------------------------------------
+
+    def _user_model_context(self) -> str:
+        """Build a concise user-profile string for prompt injection."""
+        parts = [f"用户水平: {self.user_model.expertise.value}"]
+        parts.append(f"沟通风格: {self.user_model.style.value}")
+        if self.user_model.domains_of_interest:
+            parts.append(
+                f"兴趣领域: {', '.join(self.user_model.domains_of_interest)}"
+            )
+        parts.append(f"交互次数: {self.user_model.interaction_count}")
+        return " | ".join(parts)
 
     # ------------------------------------------------------------------
     # Internal: Cognitive Loop
@@ -440,7 +740,8 @@ class Pinocchio:
         _FAST_SYSTEM = (
             "You are Pinocchio, a helpful multimodal AI assistant that learns "
             "and evolves. Respond directly to the user. Be thorough, accurate, "
-            "and helpful. Write in the same language the user uses."
+            "and helpful. Write in the same language the user uses.\n\n"
+            f"[USER PROFILE] {self._user_model_context()}"
         )
         messages = self._context_manager.build_messages(
             _FAST_SYSTEM, self.conversation_history,
@@ -496,6 +797,9 @@ class Pinocchio:
         # descriptions before entering the cognitive loop so every agent
         # can reason about them uniformly.
         modality_context = self._preprocess_modalities(user_input)
+
+        # Inject user profile so the execute phase can adapt its tone
+        modality_context["user_profile"] = self._user_model_context()
 
         # ── Phase 1: PERCEIVE ──
         # Classify the task, detect modalities, assess complexity & confidence
