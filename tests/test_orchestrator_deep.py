@@ -321,3 +321,136 @@ class TestMultimodalChat:
         agent.vision_proc.run = MagicMock(return_value="Landscape photo")
         response = agent.chat(image_paths=["landscape.jpg"])
         assert isinstance(response, str)
+
+
+# =====================================================================
+# Status enhancements
+# =====================================================================
+
+
+class TestStatusEnhancements:
+    """status() should report subsystem health and context truncation."""
+
+    def test_status_has_subsystem_health(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        s = agent.status()
+        assert "subsystem_health" in s
+        assert "embedding" in s["subsystem_health"]
+        assert "mcp" in s["subsystem_health"]
+        assert "rag" in s["subsystem_health"]
+        assert "team" in s["subsystem_health"]
+
+    def test_status_has_context_truncated(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        s = agent.status()
+        assert "context_truncated" in s
+        assert isinstance(s["context_truncated"], bool)
+
+    def test_status_reports_embedding_unavailable(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        agent._embedding_client = None
+        s = agent.status()
+        assert s["subsystem_health"]["embedding"] == "unavailable"
+
+    def test_status_context_truncated_bug_fixed(self):
+        """status()['context_truncated'] should use correct key name."""
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        agent._context_manager._summarised_turn_count = 5
+        s = agent.status()
+        assert s["context_truncated"] is True
+
+    def test_status_context_truncated_false_when_none(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        s = agent.status()
+        assert s["context_truncated"] is False
+
+
+# =====================================================================
+# Background learning failure surfacing
+# =====================================================================
+
+
+class TestLearningFailureSurfacing:
+    """Background learning errors should be surfaced in status()."""
+
+    def test_initial_learning_error_is_none(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        assert agent._last_learning_error is None
+        s = agent.status()
+        assert s["subsystem_health"]["learning"] == "ok"
+
+    def test_learning_error_stored(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        agent._last_learning_error = "LLM timeout"
+        s = agent.status()
+        assert s["subsystem_health"]["learning"] == "error"
+
+    def test_learning_error_clears_on_success(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        agent._last_learning_error = "previous error"
+        agent.agent.learn = MagicMock()
+        agent.agent.should_meta_reflect = MagicMock(return_value=False)
+        agent._defer_post_response(
+            user_text="hi",
+            perception=MagicMock(),
+            strategy=MagicMock(),
+            evaluation=MagicMock(),
+        )
+        if agent._post_response_thread:
+            agent._post_response_thread.join(timeout=5)
+        assert agent._last_learning_error is None
+
+    def test_learning_error_set_on_failure(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            agent = Pinocchio(model="test", api_key="k", base_url="http://x", verbose=False)
+        agent.agent.learn = MagicMock(side_effect=RuntimeError("LLM down"))
+        agent._defer_post_response(
+            user_text="hi",
+            perception=MagicMock(),
+            strategy=MagicMock(),
+            evaluation=MagicMock(),
+        )
+        if agent._post_response_thread:
+            agent._post_response_thread.join(timeout=5)
+        assert agent._last_learning_error is not None
+        assert "LLM down" in agent._last_learning_error
+
+
+# =====================================================================
+# Silent-except elimination (embedding init + context summarise)
+# =====================================================================
+
+
+class TestSilentExceptEliminated:
+    """Previously-silent except blocks should now log."""
+
+    def test_embedding_init_logs_warning(self):
+        with patch("pinocchio.utils.llm_client.openai"):
+            with patch("pinocchio.orchestrator._orch_logger") as mock_log:
+                with patch(
+                    "pinocchio.orchestrator.EmbeddingClient",
+                    side_effect=RuntimeError("no embed"),
+                ):
+                    agent = Pinocchio(
+                        model="test", api_key="k", base_url="http://x", verbose=False,
+                    )
+                mock_log.warning.assert_called_once()
+                assert agent._embedding_client is None
+
+    def test_context_summarisation_logs_failure(self):
+        from pinocchio.utils.context_manager import ContextManager
+        mock_llm = MagicMock()
+        mock_llm.ask = MagicMock(side_effect=RuntimeError("LLM down"))
+        cm = ContextManager(mock_llm, max_context_tokens=500)
+        conversation = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+        with patch("pinocchio.utils.context_manager._logger") as mock_log:
+            cm._maybe_summarise(conversation)
+            mock_log.warning.assert_called_once()

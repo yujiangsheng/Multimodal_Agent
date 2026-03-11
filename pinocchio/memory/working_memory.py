@@ -192,8 +192,13 @@ class WorkingMemory:
     # Relevance decay
     # ------------------------------------------------------------------
 
-    def _decay_relevance(self, decay_rate: float = 0.05) -> None:
-        """Reduce relevance of older items after each turn."""
+    def _decay_relevance(self, decay_rate: float = 0.02) -> None:
+        """Reduce relevance of older items after each turn.
+
+        Uses a gentler default decay rate (0.02 vs original 0.05) so
+        important context survives longer.  Conversation items are not
+        decayed — their ordering already captures recency.
+        """
         for item in self._items:
             if item.category != "conversation":
                 item.relevance = max(0.0, item.relevance - decay_rate)

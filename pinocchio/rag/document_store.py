@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -29,6 +30,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -194,6 +197,12 @@ class DocumentStore:
     ) -> str:
         """Ingest a document: read, chunk, embed, store. Returns doc_id."""
         p = Path(path).resolve()
+        # Prevent path traversal — file must reside under data_dir
+        allowed = self._data_dir.resolve()
+        if not str(p).startswith(str(allowed) + "/") and p != allowed:
+            raise ValueError(
+                f"Path traversal denied: {path} is outside allowed directory {allowed}"
+            )
         if not p.exists():
             raise FileNotFoundError(f"Document not found: {path}")
 
@@ -222,7 +231,12 @@ class DocumentStore:
                 for chunk in chunks:
                     emb = self._embedding_client.embed(chunk)
                     embeddings.append(emb)
-            except Exception:
+            except Exception as exc:
+                _logger.warning(
+                    "Embedding failed for document '%s': %s — "
+                    "falling back to keyword search",
+                    path, exc,
+                )
                 embeddings = []
 
         # Store in SQLite
@@ -269,7 +283,12 @@ class DocumentStore:
             try:
                 for chunk in chunks:
                     embeddings.append(self._embedding_client.embed(chunk))
-            except Exception:
+            except Exception as exc:
+                _logger.warning(
+                    "Embedding failed for inline text (source='%s'): %s — "
+                    "falling back to keyword search",
+                    source, exc,
+                )
                 embeddings = []
 
         with sqlite3.connect(str(self._db_path)) as conn:
@@ -308,8 +327,12 @@ class DocumentStore:
             try:
                 query_emb = self._embedding_client.embed(query)
                 return self._vector_search(query_emb, top_k, doc_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning(
+                    "Vector search failed for query '%.50s': %s — "
+                    "falling back to keyword search",
+                    query, exc,
+                )
 
         # Fallback: keyword search
         return self._keyword_search(query, top_k, doc_id)

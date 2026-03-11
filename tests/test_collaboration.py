@@ -219,3 +219,78 @@ class TestAgentTeam:
         assert result.success is True
         assert "real" in result.contributions
         assert "ghost" not in result.contributions
+
+
+# ========================================================================
+# Round 6 — I9: Team parallel execution thread-safety
+# ========================================================================
+
+
+class TestTeamParallelThreadSafety:
+    """Parallel team execution must use a lock to protect shared state."""
+
+    def test_parallel_contributions_consistent(self):
+        mock_llm = MagicMock()
+        mock_llm.chat.side_effect = [
+            json.dumps({"assignments": [
+                {"member_id": f"m{i}", "sub_task": f"task {i}", "order": i}
+                for i in range(8)
+            ]}),
+            *[f"output_{i}" for i in range(8)],
+            json.dumps({"reviews": [
+                {"member_id": f"m{i}", "quality_score": 8, "feedback": "ok"}
+                for i in range(8)
+            ]}),
+            "final answer",
+        ]
+
+        team = AgentTeam("test_team", llm_client=mock_llm)
+        team.parallel = True
+        team.review_enabled = False
+        for i in range(8):
+            team.add_member(TeamMember(
+                member_id=f"m{i}", role=f"role_{i}", specialty=f"spec_{i}",
+            ))
+
+        result = team.collaborate("do stuff")
+        assert len(result.contributions) == 8
+        for i in range(8):
+            assert f"m{i}" in result.contributions
+
+
+# ========================================================================
+# Round 6 — I14: Team parallel mode runs review round
+# ========================================================================
+
+
+class TestParallelReviewRound:
+    """When parallel=True and review_enabled=True, the review phase must
+    still be invoked after parallel execution completes."""
+
+    def test_parallel_review_called(self):
+        from unittest.mock import patch as _patch
+
+        mock_llm = MagicMock()
+        mock_llm.chat.side_effect = [
+            json.dumps({"assignments": [
+                {"member_id": "m1", "sub_task": "t1", "order": 1},
+                {"member_id": "m2", "sub_task": "t2", "order": 2},
+            ]}),
+            "output_1",
+            "output_2",
+            json.dumps({"reviews": [
+                {"member_id": "m1", "quality_score": 8, "feedback": "good"},
+                {"member_id": "m2", "quality_score": 8, "feedback": "good"},
+            ]}),
+            "synthesized",
+        ]
+
+        team = AgentTeam("review_team", llm_client=mock_llm)
+        team.parallel = True
+        team.review_enabled = True
+        team.add_member(TeamMember(member_id="m1", role="r1", specialty="s1"))
+        team.add_member(TeamMember(member_id="m2", role="r2", specialty="s2"))
+
+        with _patch.object(team, "_review_and_refine", wraps=team._review_and_refine) as spy:
+            team.collaborate("test task")
+            spy.assert_called_once()

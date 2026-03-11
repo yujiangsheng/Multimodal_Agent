@@ -326,3 +326,54 @@ class TestMemoryManager:
         summary = mm.summary()
         assert summary["episodic_count"] == 1
         assert summary["avg_score"] == 7.0
+
+
+# =====================================================================
+# Embedding failure logging
+# =====================================================================
+
+
+class TestMemoryManagerLogging:
+    """store_episode and store_knowledge should log embedding failures."""
+
+    def test_store_episode_logs_embedding_failure(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+        mm = MemoryManager(data_dir=tmp_data_dir)
+        mock_client = MagicMock()
+        mock_client.embed = MagicMock(side_effect=RuntimeError("down"))
+        mm.set_embedding_client(mock_client)
+        ep = EpisodicRecord(
+            task_type=TaskType.QUESTION_ANSWERING,
+            modalities=[Modality.TEXT],
+            user_intent="test",
+            strategy_used="direct",
+            outcome_score=8,
+            lessons=["learned"],
+        )
+        with patch("pinocchio.memory.memory_manager._logger") as mock_log:
+            mm.store_episode(ep)
+            mock_log.warning.assert_called_once()
+
+    def test_store_knowledge_logs_embedding_failure(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+        mm = MemoryManager(data_dir=tmp_data_dir)
+        mock_client = MagicMock()
+        mock_client.embed = MagicMock(side_effect=RuntimeError("down"))
+        mm.set_embedding_client(mock_client)
+        entry = SemanticEntry(
+            domain="test",
+            knowledge="test knowledge",
+        )
+        with patch("pinocchio.memory.memory_manager._logger") as mock_log:
+            mm.store_knowledge(entry)
+            mock_log.warning.assert_called_once()
+
+    def test_recall_logs_embedding_failure(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+        mm = MemoryManager(data_dir=tmp_data_dir)
+        mock_client = MagicMock()
+        mock_client.embed = MagicMock(side_effect=RuntimeError("down"))
+        mm.set_embedding_client(mock_client)
+        with patch("pinocchio.memory.memory_manager._logger") as mock_log:
+            mm.recall(TaskType.QUESTION_ANSWERING, [Modality.TEXT], keyword="test")
+            mock_log.warning.assert_called_once()

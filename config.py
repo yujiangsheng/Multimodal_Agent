@@ -188,7 +188,8 @@ class PinocchioConfig:
     )
 
     def __post_init__(self) -> None:
-        """Apply provider preset from PINOCCHIO_PROVIDER env var if set."""
+        """Apply provider preset from PINOCCHIO_PROVIDER env var if set,
+        then validate critical configuration values."""
         provider_name = os.getenv("PINOCCHIO_PROVIDER", "").lower()
         if provider_name and provider_name in PROVIDER_PRESETS:
             preset = PROVIDER_PRESETS[provider_name]
@@ -204,6 +205,16 @@ class PinocchioConfig:
                 key = os.getenv(preset.api_key_env, "")
                 if key:
                     self.api_key = key
+
+        # ── Validation ──
+        if self.num_ctx < 512:
+            raise ValueError(f"num_ctx must be >= 512, got {self.num_ctx}")
+        if self.max_workers is not None and self.max_workers < 1:
+            raise ValueError(f"max_workers must be >= 1, got {self.max_workers}")
+        if self.max_tokens < 1:
+            raise ValueError(f"max_tokens must be >= 1, got {self.max_tokens}")
+        if not self.model:
+            raise ValueError("model must be a non-empty string")
 
     @classmethod
     def from_provider(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -230,3 +231,50 @@ class TestUserModelContext:
         status = agent.status()
         assert "session_id" in status
         assert status["session_id"] == agent.current_session_id
+
+
+# ========================================================================
+# Round 6 — I15: switch_session acquires _lock
+# ========================================================================
+
+
+class TestSwitchSessionLocking:
+    """switch_session() must acquire self._lock."""
+
+    def test_switch_acquires_lock(self):
+        """Verify switch_session() holds the lock during mutation."""
+        from pinocchio.orchestrator import Pinocchio
+
+        p = Pinocchio.__new__(Pinocchio)
+        p._lock = threading.Lock()
+        p.conversation_history = []
+        p._current_session_id = "old"
+        p._interaction_count = 0
+        p._last_user_msg_id = None
+        p._last_asst_msg_id = None
+
+        p._conversation_store = MagicMock()
+        p._conversation_store.get_session.return_value = MagicMock(
+            id="new-session",
+            to_dict=lambda: {"id": "new-session"},
+        )
+        p._conversation_store.get_messages.return_value = []
+
+        p.user_model = MagicMock()
+        p.memory = MagicMock()
+        p._context_manager = MagicMock()
+        p._response_cache = MagicMock()
+
+        lock_was_held = []
+        original_get_messages = p._conversation_store.get_messages
+
+        def check_lock(*args, **kwargs):
+            lock_was_held.append(p._lock.locked())
+            return original_get_messages(*args, **kwargs)
+
+        p._conversation_store.get_messages = check_lock
+
+        result = p.switch_session("new-session")
+        assert result == {"id": "new-session"}
+        assert p._current_session_id == "new-session"
+        assert lock_was_held == [True]

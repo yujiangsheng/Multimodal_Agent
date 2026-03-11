@@ -250,19 +250,39 @@ class Tracer:
     Thread-safe: traces are append-only and each trace is independent.
     """
 
-    def __init__(self, max_traces: int = 1000) -> None:
-        """Create a tracer that retains up to *max_traces* traces."""
+    def __init__(self, max_traces: int = 1000, ttl_seconds: float = 3600.0) -> None:
+        """Create a tracer that retains up to *max_traces* traces.
+
+        Parameters
+        ----------
+        max_traces : int
+            Maximum number of traces to keep.
+        ttl_seconds : float
+            Time-to-live in seconds.  Traces older than this are
+            automatically evicted on every ``start_trace`` / ``create_trace``
+            call.  Defaults to 1 hour.
+        """
         self._traces: list[Trace] = []
         self._max_traces = max_traces
+        self._ttl_seconds = ttl_seconds
+
+    def _evict(self) -> None:
+        """Remove traces that exceed max count or TTL."""
+        import time as _time
+        cutoff = _time.time() - self._ttl_seconds
+        self._traces = [
+            t for t in self._traces
+            if t._start_time >= cutoff
+        ]
+        if len(self._traces) > self._max_traces:
+            self._traces = self._traces[-self._max_traces:]
 
     @contextmanager
     def start_trace(self, name: str = "interaction") -> Generator[Trace, None, None]:
         """Start a new trace. Use as a context manager."""
         trace = Trace(name=name)
         self._traces.append(trace)
-        # Evict oldest if over limit
-        if len(self._traces) > self._max_traces:
-            self._traces = self._traces[-self._max_traces:]
+        self._evict()
         try:
             yield trace
         finally:
@@ -272,8 +292,7 @@ class Tracer:
         """Create and register a new trace (non-context-manager variant)."""
         trace = Trace(name=name)
         self._traces.append(trace)
-        if len(self._traces) > self._max_traces:
-            self._traces = self._traces[-self._max_traces:]
+        self._evict()
         return trace
 
     @property

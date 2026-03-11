@@ -18,8 +18,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
+import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +39,112 @@ _DEFAULT_BASE_URL = os.getenv(
     "OPENAI_BASE_URL",
     "http://localhost:11434/v1",
 )
+
+
+# ======================================================================
+# Token tracker
+# ======================================================================
+
+class TokenTracker:
+    """Accumulative token usage tracker.
+
+    Thread-safe: each field is updated atomically via simple addition.
+    Designed to be shared across all calls on a single LLMClient.
+    """
+
+    def __init__(self) -> None:
+        self.prompt_tokens: int = 0
+        self.completion_tokens: int = 0
+        self.total_tokens: int = 0
+        self.call_count: int = 0
+
+    def record(self, usage: Any) -> None:
+        """Record token usage from an OpenAI-compatible usage object."""
+        if usage is None:
+            return
+        self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+        self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+        self.total_tokens += getattr(usage, "total_tokens", 0) or 0
+        self.call_count += 1
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly summary."""
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "call_count": self.call_count,
+        }
+
+    def reset(self) -> None:
+        """Reset all counters."""
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.call_count = 0
+
+
+_logger = logging.getLogger(__name__)
+
+
+class CircuitBreaker:
+    """Simple circuit breaker for LLM API calls.
+
+    States:
+      - CLOSED (normal): requests pass through.
+      - OPEN: requests are rejected immediately for *cooldown* seconds.
+      - HALF-OPEN: after cooldown expires, one probe request is allowed.
+        If it succeeds, state → CLOSED.  If it fails, state → OPEN again.
+    """
+
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+    def __init__(self, failure_threshold: int = 5, cooldown: float = 30.0) -> None:
+        self._failure_threshold = failure_threshold
+        self._cooldown = cooldown
+        self._lock = threading.Lock()
+        self._state = self.CLOSED
+        self._consecutive_failures = 0
+        self._opened_at: float = 0.0
+
+    @property
+    def state(self) -> str:
+        with self._lock:
+            if self._state == self.OPEN:
+                if time.monotonic() - self._opened_at >= self._cooldown:
+                    self._state = self.HALF_OPEN
+            return self._state
+
+    def allow_request(self) -> bool:
+        """Return True if the request should proceed."""
+        s = self.state
+        return s != self.OPEN
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._state = self.CLOSED
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self._failure_threshold:
+                self._state = self.OPEN
+                self._opened_at = time.monotonic()
+                _logger.warning(
+                    "Circuit breaker OPEN after %d consecutive failures — "
+                    "cooling down for %.0fs",
+                    self._consecutive_failures,
+                    self._cooldown,
+                )
+
+    def reset(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._state = self.CLOSED
+            self._opened_at = 0.0
 
 
 class LLMClient:
@@ -70,6 +179,8 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.num_ctx = num_ctx
         self._is_qwen3 = "qwen3" in model.lower()
+        self.token_tracker = TokenTracker()
+        self.circuit_breaker = CircuitBreaker()
 
         resolved_key = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
         resolved_url = base_url or _DEFAULT_BASE_URL
@@ -122,16 +233,38 @@ class LLMClient:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
+        # Circuit breaker check
+        if not self.circuit_breaker.allow_request():
+            raise RuntimeError(
+                "LLM API circuit breaker is OPEN — too many consecutive "
+                "failures. Try again later."
+            )
+
         # Retry up to 2 times on empty responses
+        last_usage = None
         for attempt in range(3):
-            response = self._client.chat.completions.create(**kwargs)
+            try:
+                response = self._client.chat.completions.create(**kwargs)
+            except Exception:
+                self.circuit_breaker.record_failure()
+                raise
+            self.circuit_breaker.record_success()
+            last_usage = getattr(response, "usage", None)
             choice = response.choices[0]
             content = choice.message.content or ""
             # Strip Qwen3 <think>...</think> blocks — they waste output tokens
             content = _THINK_RE.sub("", content)
             self._last_finish_reason = getattr(choice, "finish_reason", None) or "stop"
+            if self._last_finish_reason == "length":
+                _logger.warning(
+                    "LLM response truncated (finish_reason='length'). "
+                    "Consider increasing max_tokens (current: %s).",
+                    kwargs.get("max_tokens"),
+                )
             text = content.strip()
             if text or attempt >= 2:
+                # Record token usage only once — on the final accepted attempt
+                self.token_tracker.record(last_usage)
                 return text
             # Empty response — retry with slightly higher temperature
             kwargs["temperature"] = min(1.0, kwargs["temperature"] + 0.2)
@@ -185,6 +318,9 @@ class LLMClient:
                 if text:
                     yield text
             finish = chunk.choices[0].finish_reason if chunk.choices else None
+            # Extract token usage from the final chunk (OpenAI/Ollama compatible)
+            if hasattr(chunk, "usage") and chunk.usage:
+                self.token_tracker.record(chunk.usage)
             if finish:
                 self._last_finish_reason = finish
 
@@ -200,20 +336,45 @@ class LLMClient:
         ]
         return self.chat(messages, **kwargs)
 
-    def ask_json(self, system: str, user: str, **kwargs: Any) -> dict[str, Any]:
+    def ask_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """Call the LLM and parse the response as JSON.
 
         For Qwen3 models, prepends /no_think to skip the internal reasoning
         phase — JSON classification calls don't need chain-of-thought.
+
+        Parameters
+        ----------
+        schema : optional JSON Schema dict to validate the result against.
+            If the returned JSON does not conform, a single auto-repair
+            attempt is made: missing required keys are filled with
+            defaults and extra keys are stripped.
         """
         # Disable Qwen3 thinking mode for JSON calls — saves significant time
         if self._is_qwen3:
             user = "/no_think\n" + user
         raw = self.ask(system, user, json_mode=True, **kwargs)
+        parsed = self._parse_json_response(raw)
+        if schema and parsed:
+            parsed = self._validate_and_repair(parsed, schema)
+        return parsed
+
+    # ------------------------------------------------------------------
+    # JSON helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_json_response(raw: str) -> dict[str, Any]:
+        """Best-effort JSON extraction from raw LLM output."""
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown fences
             extracted = raw
             if "```json" in raw:
                 extracted = raw.split("```json")[1].split("```")[0]
@@ -222,7 +383,67 @@ class LLMClient:
             try:
                 return json.loads(extracted)
             except json.JSONDecodeError:
+                _logger.warning(
+                    "Failed to parse JSON from LLM response (len=%d): %.120s",
+                    len(raw), raw,
+                )
                 return {}
+
+    @staticmethod
+    def _validate_and_repair(
+        data: dict[str, Any],
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Lightweight JSON Schema validation + repair.
+
+        - Fills missing required keys with type-appropriate defaults.
+        - Coerces wrong-typed values when safe.
+        - Strips unknown keys if ``additionalProperties`` is False.
+        """
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        _TYPE_DEFAULTS: dict[str, Any] = {
+            "string": "", "integer": 0, "number": 0.0,
+            "boolean": False, "array": [], "object": {},
+        }
+
+        # Fill missing required keys
+        for key in required:
+            if key not in data:
+                prop_type = props.get(key, {}).get("type", "string")
+                data[key] = props.get(key, {}).get(
+                    "default", _TYPE_DEFAULTS.get(prop_type, ""),
+                )
+                _logger.warning(
+                    "JSON repair: filled missing required key '%s' with default %r",
+                    key, data[key],
+                )
+
+        # Coerce types where safe
+        for key, prop_schema in props.items():
+            if key not in data:
+                continue
+            expected = prop_schema.get("type")
+            val = data[key]
+            if expected == "integer" and isinstance(val, str):
+                try:
+                    data[key] = int(val)
+                except (ValueError, TypeError):
+                    pass
+            elif expected == "number" and isinstance(val, str):
+                try:
+                    data[key] = float(val)
+                except (ValueError, TypeError):
+                    pass
+            elif expected == "boolean" and isinstance(val, str):
+                data[key] = val.lower() in ("true", "1", "yes")
+
+        # Strip unknown keys
+        if schema.get("additionalProperties") is False:
+            data = {k: v for k, v in data.items() if k in props}
+
+        return data
 
     # ------------------------------------------------------------------
     # Multimodal message builders (Qwen3-VL compatible)
@@ -378,18 +599,7 @@ class AsyncLLMClient:
     async def ask_json(self, system: str, user: str, **kwargs: Any) -> dict[str, Any]:
         """Async call returning parsed JSON."""
         raw = await self.ask(system, user, json_mode=True, **kwargs)
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            extracted = raw
-            if "```json" in raw:
-                extracted = raw.split("```json")[1].split("```")[0]
-            elif "```" in raw:
-                extracted = raw.split("```")[1].split("```")[0]
-            try:
-                return json.loads(extracted)
-            except json.JSONDecodeError:
-                return {}
+        return LLMClient._parse_json_response(raw)
 
     async def close(self) -> None:
         """Close the underlying async HTTP client."""

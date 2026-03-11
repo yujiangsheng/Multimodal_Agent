@@ -44,7 +44,10 @@ Example
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
+
+_logger = logging.getLogger(__name__)
 
 from pinocchio.memory.episodic_memory import EpisodicMemory
 from pinocchio.memory.semantic_memory import SemanticMemory
@@ -142,8 +145,8 @@ class MemoryManager:
                 for e in emb_knowledge:
                     if e.entry_id not in existing_se_ids:
                         knowledge.append(e)
-            except Exception:
-                pass  # embedding service unavailable — fall back to keyword
+            except Exception as exc:
+                _logger.warning("Embedding search failed in recall(): %s — falling back to keyword", exc)
 
         # Temporal-axis enrichment
         persistent_knowledge = self.semantic.get_persistent()[:5]
@@ -171,8 +174,8 @@ class MemoryManager:
                 vec = self._embedding_client.embed(text)
                 if isinstance(vec, list) and all(isinstance(v, (int, float)) for v in vec):
                     episode.embedding = vec
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("Embedding failed for episode: %s", exc)
         self.episodic.add(episode)
         domain = episode.task_type.value
         domain_episodes = self.episodic.search_by_task_type(episode.task_type, limit=100)
@@ -197,8 +200,8 @@ class MemoryManager:
                 vec = self._embedding_client.embed(entry.knowledge)
                 if isinstance(vec, list) and all(isinstance(v, (int, float)) for v in vec):
                     entry.embedding = vec
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("Embedding failed for knowledge entry: %s", exc)
         self.semantic.add(entry)
 
     def store_procedure(self, entry: ProceduralEntry) -> None:
@@ -214,7 +217,8 @@ class MemoryManager:
     def consolidate(self) -> dict[str, int]:
         """Run consolidation across all content stores.
 
-        Promotes high-value long-term entries to persistent tier.
+        Promotes high-value long-term entries to persistent tier,
+        then purges low-value entries if stores exceed size limits.
         Returns counts of promoted entries per store.
         """
         promoted: dict[str, int] = {"episodic": 0, "semantic": 0, "procedural": 0}
@@ -240,7 +244,68 @@ class MemoryManager:
         if promoted["procedural"]:
             self.procedural.save()
 
+        # Purge low-value non-persistent entries to prevent unbounded growth
+        self.purge(max_episodic=500, max_semantic=300, max_procedural=200)
+
         return promoted
+
+    def purge(
+        self,
+        max_episodic: int = 500,
+        max_semantic: int = 300,
+        max_procedural: int = 200,
+    ) -> dict[str, int]:
+        """Remove low-value non-persistent entries exceeding size limits.
+
+        Entries with ``MemoryTier.PERSISTENT`` are never removed.
+        Among non-persistent entries, lowest-scored / oldest are removed first.
+        Returns a dict of how many entries were purged per store.
+        """
+        purged: dict[str, int] = {"episodic": 0, "semantic": 0, "procedural": 0}
+
+        # Episodic — keep persistent, drop lowest-scored non-persistent
+        all_ep = self.episodic.all()
+        persistent_ep = [e for e in all_ep if e.memory_tier == MemoryTier.PERSISTENT]
+        non_persistent_ep = [e for e in all_ep if e.memory_tier != MemoryTier.PERSISTENT]
+        if len(non_persistent_ep) > max_episodic:
+            non_persistent_ep.sort(key=lambda e: e.outcome_score)
+            to_remove = len(non_persistent_ep) - max_episodic
+            keep = non_persistent_ep[to_remove:]
+            purged["episodic"] = to_remove
+            self.episodic._episodes = persistent_ep + keep
+            self.episodic._rebuild_indices()
+            self.episodic.save()
+            _logger.info("Purged %d low-value episodic entries", to_remove)
+
+        # Semantic — keep persistent, drop lowest-confidence non-persistent
+        all_se = self.semantic.all()
+        persistent_se = [e for e in all_se if e.memory_tier == MemoryTier.PERSISTENT]
+        non_persistent_se = [e for e in all_se if e.memory_tier != MemoryTier.PERSISTENT]
+        if len(non_persistent_se) > max_semantic:
+            non_persistent_se.sort(key=lambda e: e.confidence)
+            to_remove = len(non_persistent_se) - max_semantic
+            keep = non_persistent_se[to_remove:]
+            purged["semantic"] = to_remove
+            self.semantic._entries = persistent_se + keep
+            self.semantic._rebuild_indices()
+            self.semantic.save()
+            _logger.info("Purged %d low-value semantic entries", to_remove)
+
+        # Procedural — keep persistent, drop lowest-success-rate non-persistent
+        all_pr = self.procedural.all()
+        persistent_pr = [e for e in all_pr if e.memory_tier == MemoryTier.PERSISTENT]
+        non_persistent_pr = [e for e in all_pr if e.memory_tier != MemoryTier.PERSISTENT]
+        if len(non_persistent_pr) > max_procedural:
+            non_persistent_pr.sort(key=lambda e: e.success_rate)
+            to_remove = len(non_persistent_pr) - max_procedural
+            keep = non_persistent_pr[to_remove:]
+            purged["procedural"] = to_remove
+            self.procedural._entries = persistent_pr + keep
+            self.procedural._rebuild_indices()
+            self.procedural.save()
+            _logger.info("Purged %d low-value procedural entries", to_remove)
+
+        return purged
 
     def reset_working_memory(self) -> None:
         """Clear the volatile working memory (session reset)."""

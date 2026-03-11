@@ -71,6 +71,21 @@ if TYPE_CHECKING:
 # =====================================================================
 # System Prompts (one per skill)
 # =====================================================================
+# Each prompt below is injected as the "system" message when the
+# corresponding cognitive skill method calls the LLM.  They share a
+# consistent design pattern:
+#
+#   1. Role statement — tells the LLM which sub-agent persona to adopt.
+#   2. Task description — what the LLM must produce.
+#   3. Output schema — strict JSON keys the LLM must emit (enables
+#      reliable parsing in _parse_json_response).
+#   4. Quality guidelines — domain-specific rubrics (e.g. "be critical",
+#      "never stop mid-sentence") that improve output quality.
+#
+# The prompts are intentionally verbose because smaller LLMs (4b–8b)
+# benefit from explicit structure.  Larger models (70b+) tolerate more
+# concise prompts but don't suffer from over-specification.
+# =====================================================================
 
 _PERCEIVE_PROMPT = """\
 You are the Perception sub-agent of Pinocchio, a self-evolving multimodal AI.
@@ -240,11 +255,19 @@ Output valid JSON:
 # Constants
 # =====================================================================
 
+# Number of user interactions between META-REFLECT triggers.
+# Lower values = more frequent self-analysis but higher LLM cost.
 _DEFAULT_META_REFLECT_INTERVAL = 5
+
+# Maximum number of auto-continuation rounds when the LLM's
+# finish_reason == "length" (token limit hit mid-response).
 _MAX_AUTO_CONTINUATIONS = 2
 
 # Characters that signal a natural sentence/paragraph ending.
-# Used by both _looks_complete() and _heuristic_completeness_check().
+# Used by both _looks_complete() and _heuristic_completeness_check()
+# to decide whether a response needs continuation.
+# Includes CJK and Latin punctuation, digits, and letters so that
+# responses ending with code, numbers, or normal prose are accepted.
 _TERMINAL_CHARS = set(
     ".!?。！？…\"'`）)]}】》❯→~—–-：:；;、，,"
     "0123456789"
@@ -255,7 +278,15 @@ _TERMINAL_CHARS = set(
 
 
 def _looks_complete(text: str) -> bool:
-    """Quick heuristic: does the text end at a sentence boundary?"""
+    """Quick heuristic: does the text end at a sentence boundary?
+
+    This is a fast, conservative check used before invoking the more
+    expensive LLM-based evaluator.  Returns ``True`` if the text
+    appears to be a complete response (ends with punctuation, code
+    fences are balanced, etc.).  Short texts (< 200 chars) are always
+    treated as complete to avoid false continuation triggers on terse
+    answers.
+    """
     stripped = text.strip()
     if not stripped:
         return False
@@ -758,7 +789,17 @@ class PinocchioAgent(BaseAgent):
     def _heuristic_completeness_check(text: str) -> tuple[bool, str]:
         """Quick heuristic check for obvious truncation signals.
 
-        Returns (is_likely_complete, reason_if_not).
+        This runs *before* the LLM-based evaluator to cheaply catch
+        clear truncation cases (unbalanced code fences, missing terminal
+        punctuation on long responses, empty output).  The result biases
+        the evaluator prompt so the LLM pays extra attention when the
+        heuristic flags incompleteness.
+
+        Returns
+        -------
+        tuple[bool, str]
+            ``(is_likely_complete, reason_if_not)``.  An empty reason
+            string means the response looks fine.
         """
         if not text or not text.strip():
             return False, "Response is empty"

@@ -24,6 +24,7 @@ Usage
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 
@@ -175,6 +176,10 @@ class InputGuard:
 
         result = ValidationResult(original_text=text)
 
+        # Layer 0: Normalise Unicode so confusable chars can't evade patterns
+        text = unicodedata.normalize("NFKC", text)
+        text = re.sub(r"[\u200b-\u200f\u2028-\u202f\u2060-\u2064\ufeff\u00ad]", "", text)
+
         # Layer 1: Length check
         if len(text) > self.max_length:
             result.threats.append("excessive_length")
@@ -199,6 +204,9 @@ class InputGuard:
     @staticmethod
     def _sanitise(text: str) -> str:
         """Neutralise known control sequences without destroying content."""
+        # Note: NFKC normalisation and zero-width stripping are done
+        # in validate() *before* pattern scanning so that confusable
+        # characters cannot evade injection detection.
         # Strip chat-template delimiters that could confuse the model
         text = re.sub(r"<\|(?:im_start|im_end|system|user|assistant)\|>", "", text)
         text = re.sub(r"\[/?(?:INST|SYS|SYSTEM)\]", "", text)

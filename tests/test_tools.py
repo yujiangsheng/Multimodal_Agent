@@ -33,7 +33,7 @@ class TestToolRegistry:
 
         registry = ToolRegistry()
         registry.register_defaults()
-        assert registry.count == 16
+        assert registry.count == 18
         names = registry.list_names()
         assert "calculator" in names
         assert "current_time" in names
@@ -54,7 +54,7 @@ class TestToolRegistry:
         registry.register_defaults()
         schema = registry.to_openai_schema()
         assert isinstance(schema, list)
-        assert len(schema) == 16
+        assert len(schema) == 18
         assert schema[0]["type"] == "function"
 
     def test_unregister(self):
@@ -64,7 +64,7 @@ class TestToolRegistry:
         registry.register_defaults()
         assert registry.unregister("calculator") is True
         assert registry.get("calculator") is None
-        assert registry.count == 15
+        assert registry.count == 17
 
     def test_unregister_nonexistent(self):
         from pinocchio.tools import ToolRegistry
@@ -77,20 +77,20 @@ class TestToolRegistry:
 
         registry = ToolRegistry()
         registry.register_defaults()
-        assert registry.enabled_count == 16
+        assert registry.enabled_count == 18
 
         assert registry.disable("calculator") is True
-        assert registry.enabled_count == 15
+        assert registry.enabled_count == 17
         assert "calculator" not in registry.list_enabled()
         # Disabled tools excluded from prompt & schema
         prompt_desc = registry.to_prompt_description()
         # "calculator(" should not appear (but "hash_calculator" still will)
         assert "- calculator(" not in prompt_desc
-        assert len(registry.to_openai_schema()) == 15
+        assert len(registry.to_openai_schema()) == 17
 
         # Re-enable
         assert registry.enable("calculator") is True
-        assert registry.enabled_count == 16
+        assert registry.enabled_count == 18
 
     def test_enable_disable_nonexistent(self):
         from pinocchio.tools import ToolRegistry
@@ -417,19 +417,20 @@ class TestToolCallDetection:
 
 
 class TestRegisterDefaultsCount:
-    """Validate that register_defaults registers all 16 tools."""
+    """Validate that register_defaults registers all 18 tools."""
 
     def test_default_tool_count(self):
         from pinocchio.tools import ToolRegistry
 
         registry = ToolRegistry()
         registry.register_defaults()
-        assert registry.count == 16
+        assert registry.count == 18
         expected = {
             "calculator", "current_time", "web_fetch", "file_reader",
             "file_writer", "json_formatter", "text_stats", "hash_calculator",
             "uuid_generator", "base64_codec", "unit_converter", "random_number",
             "regex_match", "system_info", "directory_listing", "shell_command",
+            "web_search", "python_exec",
         }
         assert set(registry.list_names()) == expected
 

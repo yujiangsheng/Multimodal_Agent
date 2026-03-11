@@ -211,6 +211,58 @@ body {
   40% { transform: translateY(-6px); }
 }
 
+/* Phase progress stepper */
+.phase-progress {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  max-width: 78%;
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+}
+.phase-step {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--surface2);
+  color: var(--dim);
+  transition: all .3s ease;
+  white-space: nowrap;
+}
+.phase-step.running {
+  background: rgba(124,111,247,0.15);
+  color: var(--accent2);
+  box-shadow: 0 0 8px rgba(124,111,247,0.2);
+}
+.phase-step.done {
+  background: rgba(74,222,128,0.1);
+  color: var(--green);
+}
+.phase-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+  transition: all .3s ease;
+}
+.phase-step.running .phase-dot {
+  background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+.phase-step.done .phase-dot {
+  background: var(--green);
+}
+.phase-arrow {
+  color: var(--dim);
+  font-size: 10px;
+}
+
 /* ─── Input bar ─────────────────────────────────────────── */
 .input-area {
   padding: 14px 24px;
@@ -664,6 +716,7 @@ body {
     <div class="topbar-right">
       <button class="top-btn" id="btnNewChat" onclick="newSession()">+ 新对话</button>
       <button class="top-btn" id="btnReset">重置会话</button>
+      <button class="top-btn" id="btnExit" style="color:var(--red);border-color:rgba(248,113,113,0.3)">退出</button>
     </div>
   </div>
 
@@ -993,7 +1046,7 @@ async function send() {
     return;
   }
 
-  // POST path for file uploads
+  // POST path for file uploads → uses progress SSE endpoint
   const fd = new FormData();
   fd.append('text', text);
   F.images.forEach(f => fd.append('images', f));
@@ -1002,22 +1055,57 @@ async function send() {
   clearFiles();
 
   try {
-    const r = await fetch('/api/chat', {method:'POST', body:fd});
-    const d = await r.json();
+    const response = await _origFetch('/api/chat/progress', {method:'POST', body:fd});
+    if (!response.ok) throw new Error('连接失败');
+
     rmTyping();
-    if (d.status === 'ok') {
-      const userEls = msgs.querySelectorAll('.msg-user');
-      const lastU = userEls[userEls.length - 1];
-      if (lastU && d.user_message_id) lastU.dataset.msgId = d.user_message_id;
-      addMsg('agent', d.response, null, d.assistant_message_id);
-      if (d.session_id) currentSessionId = d.session_id;
-    } else {
-      addMsg('system', d.response);
+    // Show phase progress stepper
+    const phaseEl = addPhaseProgress();
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
+        try {
+          const d = JSON.parse(payload);
+          if (d.type === 'phase') {
+            updatePhaseStep(phaseEl, d.phase, d.status, d.detail);
+          } else if (d.type === 'result') {
+            finalResult = d;
+          }
+        } catch(_) {}
+      }
+    }
+
+    // Remove phase progress, show response
+    if (phaseEl) phaseEl.remove();
+    if (finalResult) {
+      if (finalResult.status === 'ok') {
+        const userEls = msgs.querySelectorAll('.msg-user');
+        const lastU = userEls[userEls.length - 1];
+        if (lastU && finalResult.user_message_id) lastU.dataset.msgId = finalResult.user_message_id;
+        addMsg('agent', finalResult.response, null, finalResult.assistant_message_id);
+        if (finalResult.session_id) currentSessionId = finalResult.session_id;
+      } else {
+        addMsg('system', finalResult.response);
+      }
     }
     refreshAll();
     loadSessions();
   } catch(e) {
     rmTyping();
+    rmPhaseProgress();
     addMsg('system', '请求失败: '+e.message);
   } finally {
     busy = false;
@@ -1025,6 +1113,43 @@ async function send() {
     txtIn.focus();
   }
 }
+
+/* ═══ Phase Progress ══════════════════════════════════════ */
+const _phaseLabels = {
+  preprocess: '预处理', perceive: '感知', plan: '规划',
+  rag: '检索', strategize: '策略', execute: '执行',
+  evaluate: '评估', learn: '学习', reflect: '元反思',
+};
+function addPhaseProgress() {
+  const el = document.createElement('div');
+  el.className = 'phase-progress';
+  el.id = 'phaseProgress';
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+  return el;
+}
+function updatePhaseStep(container, phase, status, detail) {
+  if (!container) return;
+  let step = container.querySelector(`[data-phase="${phase}"]`);
+  if (!step) {
+    // Add arrow if not first
+    if (container.children.length > 0) {
+      const arrow = document.createElement('span');
+      arrow.className = 'phase-arrow';
+      arrow.textContent = '→';
+      container.appendChild(arrow);
+    }
+    step = document.createElement('span');
+    step.className = 'phase-step';
+    step.dataset.phase = phase;
+    step.innerHTML = `<span class="phase-dot"></span>${_phaseLabels[phase] || phase}`;
+    container.appendChild(step);
+  }
+  step.className = `phase-step ${status === 'done' ? 'done' : 'running'}`;
+  if (detail) step.title = detail;
+  msgs.scrollTop = msgs.scrollHeight;
+}
+function rmPhaseProgress() { const e=$('#phaseProgress'); if(e) e.remove(); }
 
 btnSend.addEventListener('click', send);
 txtIn.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
@@ -1039,6 +1164,16 @@ $('#btnReset').addEventListener('click', async () => {
   addMsg('system', '会话已重置');
   refreshAll();
   fetch('/api/status').then(r=>r.json()).then(s => { currentSessionId = s.session_id; loadSessions(); });
+});
+
+/* ═══ Exit ════════════════════════════════════════════════ */
+$('#btnExit').addEventListener('click', async () => {
+  if (!confirm('确定退出 Pinocchio？服务器将关闭。')) return;
+  try {
+    await fetch('/api/exit', {method:'POST'});
+    addMsg('system', '服务器已关闭，请关闭此页面。');
+  } catch(e) { /* server already down */ }
+  document.title = 'Pinocchio — 已停止';
 });
 
 /* ═══ Overview data ═══════════════════════════════════════ */

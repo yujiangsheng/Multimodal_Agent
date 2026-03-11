@@ -94,7 +94,15 @@ _PYTHON_TYPE_TO_JSON: dict[type, str] = {
 
 
 def _build_schema_from_function(func: Callable) -> dict[str, Any]:
-    """Auto-generate a JSON Schema 'parameters' block from function signature."""
+    """Auto-generate a JSON Schema ``parameters`` block from a function signature.
+
+    Inspects ``inspect.signature`` and ``typing.get_type_hints`` to build
+    a schema compatible with the OpenAI function-calling format.  Parameters
+    without defaults are marked as ``required``.
+
+    This enables the ``@tool`` decorator to register functions without
+    manually specifying a parameter schema.
+    """
     sig = inspect.signature(func)
     try:
         hints = get_type_hints(func)
@@ -495,6 +503,31 @@ class ToolExecutor:
 # =====================================================================
 # Built-in Tools
 # =====================================================================
+#
+# 18 built-in tools organised by category:
+#
+#   • Math & Data
+#     calculator, json_formatter, text_stats, hash_calculator,
+#     uuid_generator, base64_codec, unit_converter, random_number,
+#     regex_match
+#
+#   • Web & Network
+#     web_fetch (SSRF-protected), web_search (DuckDuckGo)
+#
+#   • File System
+#     file_reader (extension allowlist), file_writer, directory_listing
+#
+#   • System
+#     current_time, system_info, shell_command (command allowlist)
+#
+#   • Code Execution
+#     python_exec (sandboxed subprocess)
+#
+# Each tool follows the same pattern:
+#   1. Pure function ``_tool_name(...)`` with docstring
+#   2. ``Tool(...)`` dataclass instance with JSON Schema parameters
+#   3. Collected into ``_ALL_DEFAULT_TOOLS`` for ``register_defaults()``
+# =====================================================================
 
 # Allowlist for safe math evaluation
 _SAFE_MATH_NAMES: dict[str, Any] = {
@@ -589,7 +622,7 @@ def _web_fetch(url: str, max_length: int = 8000) -> str:
 
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True, max_redirects=5) as client:
-            resp = client.get(url, headers={"User-Agent": "Pinocchio-Agent/0.3"})
+            resp = client.get(url, headers={"User-Agent": "Pinocchio-Agent/0.4"})
             resp.raise_for_status()
             content_type = resp.headers.get("content-type", "")
             if "text" in content_type or "json" in content_type or "xml" in content_type:
@@ -1216,14 +1249,164 @@ _SHELL_COMMAND_TOOL = Tool(
 )
 
 
+# ── web_search ───────────────────────────────────────────────────────
+
+def _web_search(query: str, max_results: int = 5) -> str:
+    """Search the web and return results."""
+    max_results = max(1, min(max_results, 10))
+
+    # Strategy 1: duckduckgo_search package (best results)
+    try:
+        from duckduckgo_search import DDGS  # type: ignore[import-untyped]
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        if results:
+            lines = []
+            for i, r in enumerate(results):
+                lines.append(
+                    f"{i + 1}. {r.get('title', '')}\n"
+                    f"   URL: {r.get('href', '')}\n"
+                    f"   {r.get('body', '')}"
+                )
+            return "\n\n".join(lines)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Strategy 2: DuckDuckGo Instant Answer JSON API (no dependency)
+    try:
+        import httpx
+    except ImportError:
+        return "[Error] httpx is not installed"
+
+    parsed_url = urlparse("https://api.duckduckgo.com/")
+    hostname = parsed_url.hostname or ""
+    if _is_private_ip(hostname):
+        return "[Error] Cannot reach search API"
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "no_html": "1",
+                    "skip_disambig": "1",
+                },
+                headers={"User-Agent": "Pinocchio-Agent/0.4"},
+            )
+            data = resp.json()
+
+        parts: list[str] = []
+        if data.get("AbstractText"):
+            parts.append(
+                f"Summary: {data['AbstractText']}\n"
+                f"Source: {data.get('AbstractSource', '')}\n"
+                f"URL: {data.get('AbstractURL', '')}"
+            )
+        for topic in data.get("RelatedTopics", [])[:max_results]:
+            if isinstance(topic, dict) and "Text" in topic:
+                parts.append(
+                    f"• {topic['Text']}\n"
+                    f"  URL: {topic.get('FirstURL', '')}"
+                )
+        if parts:
+            return "\n\n".join(parts)
+    except Exception as exc:
+        return f"[Error] Search failed: {exc}"
+
+    return (
+        f"No results found for: {query}. "
+        "Install 'duckduckgo-search' package for better results."
+    )
+
+
+_WEB_SEARCH_TOOL = Tool(
+    name="web_search",
+    description=(
+        "Search the web for information. Returns titles, URLs, and snippets "
+        "from search results. Use this when you need up-to-date information "
+        "or facts you're not sure about."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default 5, max 10)",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    },
+    function=_web_search,
+)
+
+
+# ── python_exec ──────────────────────────────────────────────────────
+
+def _python_exec(code: str, timeout: int = 15) -> str:
+    """Execute Python code in an isolated sandbox."""
+    from pinocchio.sandbox.code_sandbox import CodeSandbox
+
+    timeout = max(1, min(timeout, 60))
+    sandbox = CodeSandbox(timeout=timeout)
+    result = sandbox.execute(code)
+
+    if result.success:
+        output = result.stdout.strip()
+        return output if output else "(code executed successfully, no output)"
+    else:
+        err = result.error or result.stderr
+        if result.timed_out:
+            return f"[Error] Code execution timed out after {timeout}s"
+        return f"[Error] {err}"
+
+
+_PYTHON_EXEC_TOOL = Tool(
+    name="python_exec",
+    description=(
+        "Execute Python code in a secure, isolated sandbox. "
+        "Useful for calculations, data processing, algorithm testing, "
+        "and generating outputs programmatically. "
+        "Note: network access, file writing, and dangerous modules "
+        "(os, subprocess, etc.) are blocked."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Python code to execute",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Execution timeout in seconds (default 15, max 60)",
+                "default": 15,
+            },
+        },
+        "required": ["code"],
+    },
+    function=_python_exec,
+)
+
+
 # =====================================================================
-# All default tools — referenced by register_defaults()
+# All default tools — referenced by ToolRegistry.register_defaults()
+# Order here doesn't matter; the registry uses a dict keyed by name.
 # =====================================================================
 
 _ALL_DEFAULT_TOOLS: list[Tool] = [
     _CALCULATOR_TOOL,
     _CURRENT_TIME_TOOL,
     _WEB_FETCH_TOOL,
+    _WEB_SEARCH_TOOL,
     _FILE_READER_TOOL,
     _FILE_WRITER_TOOL,
     _JSON_FORMATTER_TOOL,
@@ -1237,4 +1420,5 @@ _ALL_DEFAULT_TOOLS: list[Tool] = [
     _SYSTEM_INFO_TOOL,
     _DIRECTORY_LISTING_TOOL,
     _SHELL_COMMAND_TOOL,
+    _PYTHON_EXEC_TOOL,
 ]

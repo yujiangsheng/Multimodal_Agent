@@ -46,6 +46,8 @@ from pinocchio.mcp.mcp_client import MCPClient, MCPToolBridge
 from pinocchio.graph.agent_graph import AgentGraph, GraphNode, GraphEdge, GraphExecutor
 from pinocchio.collaboration.team import AgentTeam, TeamMember
 from pinocchio.tracing.tracer import Tracer, Trace, Span
+from pinocchio.utils.output_guard import OutputGuard, OutputCheckResult
+from pinocchio.utils.llm_client import TokenTracker
 
 __all__ = [
     "Pinocchio", "Tool", "ToolRegistry", "ToolExecutor", "tool",
@@ -63,4 +65,6 @@ __all__ = [
     "AgentTeam", "TeamMember",
     # Tracing
     "Tracer", "Trace", "Span",
+    # Guards & tracking
+    "OutputGuard", "OutputCheckResult", "TokenTracker",
 ]

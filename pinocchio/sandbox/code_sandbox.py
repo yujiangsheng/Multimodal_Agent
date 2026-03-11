@@ -63,26 +63,41 @@ _BLOCKED_MODULES = {
 _SANDBOX_WRAPPER = textwrap.dedent("""\
     import builtins as _builtins
     import sys as _sys
+    import os as _os
 
     # Block dangerous modules
     _BLOCKED = {blocked}
     _original_import = _builtins.__import__
 
     def _safe_import(name, *args, **kwargs):
-        top_level = name.split(".")[0]
-        if top_level in _BLOCKED:
-            raise ImportError(f"Module '{{name}}' is not allowed in sandbox")
+        # Check ALL components of the dotted name, not just top-level
+        parts = name.split(".")
+        for part in parts:
+            if part in _BLOCKED:
+                raise ImportError(f"Module '{{name}}' is not allowed in sandbox")
         return _original_import(name, *args, **kwargs)
 
     _builtins.__import__ = _safe_import
 
-    # Block open() for writing
+    # Block open() for writing AND restrict reads to sandbox directory
     _original_open = _builtins.open
+    _SANDBOX_DIR = _os.path.realpath(_os.getcwd())
 
     def _safe_open(file, mode="r", *args, **kwargs):
-        if any(c in mode for c in "waxb+"):
-            if any(c in mode for c in "wa+x"):
-                raise PermissionError("File writing is not allowed in sandbox")
+        # Block all write modes
+        if any(c in mode for c in "wa+x"):
+            raise PermissionError("File writing is not allowed in sandbox")
+        # For read mode, restrict to sandbox directory and user code files
+        resolved = _os.path.realpath(str(file))
+        if not resolved.startswith(_SANDBOX_DIR):
+            # Allow reading Python stdlib (site-packages, lib)
+            _allowed_prefixes = [_os.path.realpath(_sys.prefix), _os.path.realpath(_sys.exec_prefix)]
+            if hasattr(_sys, 'base_prefix'):
+                _allowed_prefixes.append(_os.path.realpath(_sys.base_prefix))
+            if not any(resolved.startswith(p) for p in _allowed_prefixes):
+                raise PermissionError(
+                    f"Reading files outside sandbox is not allowed: {{file}}"
+                )
         return _original_open(file, mode, *args, **kwargs)
 
     _builtins.open = _safe_open
@@ -173,6 +188,14 @@ class CodeSandbox:
             ("exec(", "Nested exec() is not allowed"),
             ("eval(", "eval() is not allowed — use direct expressions"),
             ("compile(", "compile() is not allowed"),
+            ("getattr(", "getattr() is not allowed in sandbox"),
+            ("__subclasses__", "__subclasses__ access is not allowed"),
+            ("__bases__", "__bases__ access is not allowed"),
+            ("__mro__", "__mro__ access is not allowed"),
+            ("__globals__", "__globals__ access is not allowed"),
+            ("__builtins__", "__builtins__ access is not allowed"),
+            ("__loader__", "__loader__ access is not allowed"),
+            ("__spec__", "__spec__ access is not allowed"),
         ]
         for pattern, msg in dangerous_patterns:
             if pattern in code:

@@ -20,7 +20,10 @@ Usage
 
 from __future__ import annotations
 
+import logging
 from typing import Any, TYPE_CHECKING
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pinocchio.utils.llm_client import LLMClient
@@ -207,5 +210,5 @@ class ContextManager:
                 max_tokens=400,
             )
             self._summarised_turn_count = cut
-        except Exception:
-            pass  # keep the old summary if LLM call fails
+        except Exception as exc:
+            _logger.warning("Context summarisation failed: %s — keeping old summary", exc)

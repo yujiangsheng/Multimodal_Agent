@@ -110,3 +110,33 @@ class TestCodeSandbox:
         result = sandbox.execute("print([x**2 for x in range(5)])")
         assert result.success is True
         assert "[0, 1, 4, 9, 16]" in result.stdout
+
+
+# =====================================================================
+# File read jailing
+# =====================================================================
+
+
+class TestSandboxJailing:
+    """Sandbox should restrict file reads to sandbox directory."""
+
+    def test_read_local_file_blocked(self):
+        sandbox = CodeSandbox(timeout=5)
+        result = sandbox.execute("f = open('/etc/hostname', 'r'); print(f.read())")
+        assert not result.success or "not allowed" in result.error.lower() or "permission" in result.stderr.lower()
+
+    def test_write_still_blocked(self):
+        sandbox = CodeSandbox(timeout=5)
+        result = sandbox.execute("open('/tmp/evil.txt', 'w').write('pwned')")
+        assert not result.success
+
+    def test_local_file_creation_in_sandbox(self):
+        sandbox = CodeSandbox(timeout=5)
+        result = sandbox.execute("open('test.txt', 'w').write('data')")
+        assert not result.success
+
+    def test_stdlib_import_still_works(self):
+        sandbox = CodeSandbox(timeout=5)
+        result = sandbox.execute("import math; print(math.pi)")
+        assert result.success
+        assert "3.14" in result.stdout

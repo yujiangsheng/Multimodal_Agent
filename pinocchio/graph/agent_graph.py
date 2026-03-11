@@ -274,6 +274,16 @@ class GraphExecutor:
         """Execute a single node, checking edge conditions first."""
         node = graph.nodes[node_id]
 
+        # Check predecessors — skip node if any predecessor failed
+        for pred_id in graph.predecessors(node_id):
+            pred_result = results.get(pred_id)
+            if pred_result and not pred_result.success:
+                return NodeResult(
+                    node_id=node_id,
+                    success=False,
+                    error=f"Skipped: predecessor '{pred_id}' failed",
+                )
+
         # Check if all incoming conditional edges are satisfied
         for pred_id in graph.predecessors(node_id):
             pred_result = results.get(pred_id)

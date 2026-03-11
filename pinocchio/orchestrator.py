@@ -40,9 +40,12 @@ import asyncio
 import threading
 import traceback
 from collections.abc import Callable, Generator
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+_orch_logger = logging.getLogger(__name__)
 
 from pinocchio.agents.unified_agent import PinocchioAgent
 from pinocchio.memory.memory_manager import MemoryManager
@@ -60,8 +63,9 @@ from pinocchio.tools import Tool, ToolExecutor, ToolRegistry, tool as tool_decor
 from pinocchio.utils.context_manager import ContextManager
 from pinocchio.utils.conversation_store import ConversationStore
 from pinocchio.utils.input_guard import InputGuard
-from pinocchio.utils.llm_client import EmbeddingClient, LLMClient
+from pinocchio.utils.llm_client import EmbeddingClient, LLMClient, TokenTracker
 from pinocchio.utils.logger import PinocchioLogger
+from pinocchio.utils.output_guard import OutputGuard
 from pinocchio.utils.resource_monitor import ResourceMonitor
 from pinocchio.utils.response_cache import ResponseCache
 
@@ -71,7 +75,7 @@ from pinocchio.planning.react import ReActExecutor
 from pinocchio.sandbox.code_sandbox import CodeSandbox
 from pinocchio.rag.document_store import DocumentStore
 from pinocchio.mcp.mcp_client import MCPToolBridge
-from pinocchio.graph.agent_graph import AgentGraph, GraphExecutor
+from pinocchio.graph.agent_graph import AgentGraph, GraphEdge, GraphExecutor, GraphNode
 from pinocchio.collaboration.team import AgentTeam, TeamMember
 from pinocchio.tracing.tracer import Tracer
 
@@ -165,7 +169,8 @@ class Pinocchio:
                 api_key=api_key, base_url=base_url,
             )
             self.memory.set_embedding_client(self._embedding_client)
-        except Exception:
+        except Exception as exc:
+            _orch_logger.warning("EmbeddingClient init failed: %s — vector search disabled", exc)
             self._embedding_client = None
 
         # Multimodal processor pool
@@ -183,6 +188,9 @@ class Pinocchio:
         # Input guard (prompt injection defense)
         self._input_guard = InputGuard()
 
+        # Output guard (PII masking, content policy, hallucination flags)
+        self._output_guard = OutputGuard()
+
         # Context window manager (summarise old turns)
         self._context_manager = ContextManager(
             self.llm,
@@ -199,6 +207,7 @@ class Pinocchio:
         self._verbose = verbose
         self._lock = threading.Lock()  # protects session state mutations
         self._post_response_thread: threading.Thread | None = None
+        self._last_learning_error: str | None = None
 
         # Conversation persistence (SQLite)
         self._conversation_store = ConversationStore(
@@ -212,32 +221,52 @@ class Pinocchio:
         # Remove leftover empty sessions from earlier restarts / tests
         self._conversation_store.purge_empty_sessions(keep_id=session.id)
 
-        # ── New subsystems (Gaps 1–7) ──
+        # Progress callback for real-time phase updates
+        self._progress_callback: Callable[[str, str, str], None] | None = None
+
+        # Thread-local storage for per-call stream event queues
+        # (used by chat_stream to avoid monkey-patching shared state)
+        self._stream_event_queue_local = threading.local()
+
+        # ── New subsystems (v0.3.0+) ──
+        # Each subsystem is lazily wired into the cognitive loop only when
+        # its activation conditions are met (e.g. complexity threshold).
+
         # Gap 1: Multi-step task planner (ReAct)
+        # Activated when task complexity >= 4 or task_type == "tool_use".
         self.planner = TaskPlanner(self.llm)
         self.react_executor = ReActExecutor(
             self.llm, self.tool_executor, self.tool_registry,
         )
 
-        # Gap 2: Code sandbox
+        # Gap 2: Code sandbox — isolated subprocess execution
         self.sandbox = CodeSandbox()
 
-        # Gap 3: RAG document store
+        # Gap 3: RAG document store — SQLite-backed chunk storage + hybrid search
         self.document_store = DocumentStore(data_dir=data_dir)
         if self._embedding_client:
             self.document_store.set_embedding_client(self._embedding_client)
 
-        # Gap 4: MCP protocol bridge
+        # Gap 4: MCP protocol bridge — JSON-RPC 2.0 tool server connector
         self.mcp_bridge = MCPToolBridge(self.tool_registry)
+        self._auto_connect_mcp()
 
-        # Gap 5: Agent graph (workflow engine)
+        # Gap 5: Agent graph (DAG workflow engine) + built-in templates
+        # Templates registered in _register_graph_templates() below.
         self.graph_executor = GraphExecutor(max_workers=self._max_workers)
+        self._graph_templates: dict[str, AgentGraph] = {}
+        self._register_graph_templates()
 
-        # Gap 6: Multi-agent collaboration
+        # Gap 6: Multi-agent collaboration (team decompose → assign → execute → synthesize)
         self.team = AgentTeam("default_team", llm_client=self.llm)
 
-        # Gap 7: Structured tracing
+        # Gap 7: Structured tracing — OpenTelemetry-style Trace/Span system
         self.tracer = Tracer()
+
+        # Register atexit handler so non-daemon post-response threads
+        # finish their memory writes before process exit.
+        import atexit
+        atexit.register(self._wait_for_background)
 
         # Log detected hardware
         if verbose:
@@ -390,9 +419,11 @@ class Pinocchio:
     ) -> Generator[str, None, None]:
         """Stream the agent's response token-by-token.
 
-        Uses the fast path (simple text-only, ≤ FAST_PATH_MAX_LENGTH).
-        For multimodal or complex input, falls back to yielding the full
-        ``chat()`` response as a single chunk.
+        For simple text-only inputs, streams the LLM response directly.
+        For complex inputs that go through the full cognitive loop,
+        streams intermediate tool observations (prefixed with special
+        markers ``[STEP]`` / ``[/STEP]``) followed by the final answer
+        so the frontend can show the reasoning process in real time.
         """
         with self._lock:
             self._interaction_count += 1
@@ -457,10 +488,57 @@ class Pinocchio:
                 self._last_user_msg_id = user_msg_id
                 self._last_asst_msg_id = asst_msg_id
         else:
-            # Fallback: run full cognitive loop and yield result as one chunk
-            response = self.chat(text, image_paths=image_paths,
-                                 audio_paths=audio_paths, video_paths=video_paths)
-            yield response
+            # ── Full cognitive loop with real-time streaming ──
+            # Run the cognitive loop in a background thread while streaming
+            # phase progress and ReAct observations via a shared queue.
+            # Thread-safety: we use a thread-local _stream_event_queue to
+            # inject per-call progress/step events WITHOUT monkey-patching
+            # shared instance attributes.  Concurrent chat_stream() calls
+            # each get their own queue — no cross-contamination.
+            import queue as _queue
+            event_queue: _queue.Queue[str | None] = _queue.Queue()
+
+            result_container: list[str] = []
+
+            def _run_loop() -> None:
+                """Execute the cognitive loop with per-call event queue."""
+                # Stash queue in thread-local so _emit_progress and
+                # react_executor can pick it up without instance mutation.
+                self._stream_event_queue_local.queue = event_queue
+                try:
+                    r = self.chat(
+                        text,
+                        image_paths=image_paths,
+                        audio_paths=audio_paths,
+                        video_paths=video_paths,
+                    )
+                    result_container.append(r)
+                except Exception as exc:
+                    result_container.append(f"处理错误: {exc}")
+                finally:
+                    self._stream_event_queue_local.queue = None
+                    event_queue.put(None)  # sentinel
+
+            loop_thread = threading.Thread(
+                target=_run_loop, name="pinocchio-stream-loop", daemon=True,
+            )
+            loop_thread.start()
+
+            # Yield events in real-time as they arrive
+            while True:
+                try:
+                    msg = event_queue.get(timeout=0.3)
+                except _queue.Empty:
+                    if not loop_thread.is_alive():
+                        break
+                    continue
+                if msg is None:
+                    break
+                yield msg
+
+            # Yield the final response
+            if result_container:
+                yield result_container[0]
 
     def reset(self) -> None:
         """Reset session state (keeps persistent memory)."""
@@ -479,9 +557,32 @@ class Pinocchio:
     def status(self) -> dict[str, Any]:
         """Return a summary of the agent's current state."""
         self._resources = self._resource_monitor.snapshot(refresh=True)
+
+        # Check subsystem health for degraded-mode awareness
+        subsystem_health: dict[str, str] = {}
+        subsystem_health["embedding"] = (
+            "ok" if self._embedding_client else "unavailable"
+        )
+        subsystem_health["mcp"] = (
+            "ok" if self.mcp_bridge.connected_servers else "no_servers"
+        )
+        subsystem_health["rag"] = (
+            "ok" if self.document_store.get_chunk_count() > 0 else "empty"
+        )
+        subsystem_health["team"] = (
+            "ok" if len(self.team.members) >= 2 else "insufficient_members"
+        )
+        subsystem_health["learning"] = (
+            "error" if self._last_learning_error else "ok"
+        )
+        ctx_stats = self._context_manager.stats()
+        context_truncated = ctx_stats.get("summarised_turns", 0) > 0
+
         return {
             "interaction_count": self._interaction_count,
             "session_id": self._current_session_id,
+            "context_truncated": context_truncated,
+            "subsystem_health": subsystem_health,
             "memory_summary": self.memory.summary(),
             "improvement_trend": self.memory.improvement_trend(),
             "user_model": {
@@ -501,7 +602,9 @@ class Pinocchio:
                 "connected_servers": self.mcp_bridge.connected_servers,
             },
             "tracing": self.tracer.stats(),
+            "token_usage": self.llm.token_tracker.to_dict(),
             "team_members": list(self.team.members.keys()),
+            "graph_templates": list(self._graph_templates.keys()),
         }
 
     # ------------------------------------------------------------------
@@ -536,26 +639,27 @@ class Pinocchio:
         if session is None:
             return None
 
-        # Load messages into conversation_history
-        stored = self._conversation_store.get_messages(session_id)
-        self.conversation_history = [
-            {"role": m.role, "content": m.content, "id": m.id}
-            for m in stored
-        ]
-        self._current_session_id = session_id
-        self._interaction_count = sum(
-            1 for m in stored if m.role == "user"
-        )
-        self.user_model.interaction_count = self._interaction_count
-        self.memory.reset_working_memory()
-        self._context_manager.reset()
-        self._response_cache.clear()
-
-        # Re-seed working memory with recent turns
-        for msg in self.conversation_history[-12:]:
-            self.memory.working.add_conversation_turn(
-                msg["role"], msg["content"][:500],
+        with self._lock:
+            # Load messages into conversation_history
+            stored = self._conversation_store.get_messages(session_id)
+            self.conversation_history = [
+                {"role": m.role, "content": m.content, "id": m.id}
+                for m in stored
+            ]
+            self._current_session_id = session_id
+            self._interaction_count = sum(
+                1 for m in stored if m.role == "user"
             )
+            self.user_model.interaction_count = self._interaction_count
+            self.memory.reset_working_memory()
+            self._context_manager.reset()
+            self._response_cache.clear()
+
+            # Re-seed working memory with recent turns
+            for msg in self.conversation_history[-12:]:
+                self.memory.working.add_conversation_turn(
+                    msg["role"], msg["content"][:500],
+                )
 
         return session.to_dict()
 
@@ -827,6 +931,18 @@ class Pinocchio:
         dedicated sub-agent.  Phase 4.5 (retry loop) ensures response
         completeness, and Phase 6 meta-reflect fires periodically for
         higher-order self-improvement.
+
+        Integration points (formerly isolated modules now wired in):
+        - **RAG**: After PERCEIVE, relevant document chunks are retrieved
+          from the DocumentStore and injected into the EXECUTE context.
+        - **Planning + ReAct**: For complex tasks (complexity ≥ 4) or
+          tool_use tasks, the ReAct executor drives step-by-step
+          reasoning with tool calls.
+        - **Team collaboration**: For highly complex analytical tasks
+          (complexity ≥ 5) with available team members, AgentTeam
+          coordinates a multi-agent collaboration round.
+        - **Progress callbacks**: Each phase notifies registered callbacks
+          so the frontend can display real-time phase status.
         """
 
         # ── Phase 0: Buffer the raw user input into working memory ──
@@ -841,12 +957,15 @@ class Pinocchio:
         trace = self.tracer.create_trace(f"interaction_{self._interaction_count}")
 
         # ── Phase 0.5: PREPROCESS MODALITIES ──
+        self._emit_progress("preprocess", "running", "预处理多模态输入…")
         with trace.span("preprocess_modalities") as sp:
             modality_context = self._preprocess_modalities(user_input)
             modality_context["user_profile"] = self._user_model_context()
             sp.set_attribute("modalities", list(modality_context.keys()))
+        self._emit_progress("preprocess", "done")
 
         # ── Phase 1: PERCEIVE ──
+        self._emit_progress("perceive", "running", "感知与分析输入…")
         with trace.span("perceive") as sp:
             perception = self.agent.perceive(
                 user_input=user_input,
@@ -854,31 +973,201 @@ class Pinocchio:
             )
             sp.set_attribute("task_type", str(getattr(perception, 'task_type', '')))
             sp.set_attribute("complexity", int(getattr(perception, 'complexity', 0)))
+        self._emit_progress("perceive", "done")
+
+        # ── Phase 1.1: GRAPH TEMPLATE AUTO-ROUTING ──
+        # If the perceived task type maps to a registered graph template,
+        # execute the graph workflow and skip to EVALUATE.
+        complexity_val = int(getattr(perception, 'complexity', 0))
+        task_type_val = str(getattr(perception, 'task_type', ''))
+
+        _TASK_GRAPH_MAP: dict[str, str] = {
+            "analysis": "research",
+            "question_answering": "research",
+            "code_generation": "code_review",
+        }
+        graph_key = _TASK_GRAPH_MAP.get(task_type_val)
+        if (
+            graph_key
+            and graph_key in self._graph_templates
+            and complexity_val >= 4
+            and user_input.text
+        ):
+            self._emit_progress("graph", "running", f"执行 {graph_key} 工作流…")
+            with trace.span("graph_auto_route") as sp:
+                graph_input = {"query": user_input.text, "code": user_input.text}
+                graph_results = self.graph_executor.run(
+                    self._graph_templates[graph_key],
+                    initial_input=graph_input,
+                )
+                # Merge outputs from all nodes (preserving order)
+                output_parts: list[str] = []
+                for nid, nr in graph_results.items():
+                    if nr.output:
+                        output_parts.append(str(nr.output))
+                last_output = "\n\n".join(output_parts)
+                if not last_output:
+                    _orch_logger.warning(
+                        "Graph template '%s' produced no output from any node",
+                        graph_key,
+                    )
+                sp.set_attribute("graph_template", graph_key)
+                sp.set_attribute("nodes_executed", len(graph_results))
+            self._emit_progress("graph", "done")
+
+            if last_output:
+                self.logger.log(
+                    AgentRole.ORCHESTRATOR,
+                    f"Graph template '{graph_key}' auto-routed — {len(last_output)} chars",
+                )
+                response = AgentMessage(
+                    role="assistant",
+                    content=last_output,
+                    confidence=0.85,
+                    metadata={"execution_path": "graph_auto", "graph_template": graph_key},
+                )
+                # Skip to EVALUATE
+                self._emit_progress("evaluate", "running", "评估回复质量…")
+                with trace.span("evaluate") as sp:
+                    evaluation = self.agent.evaluate(
+                        user_input=user_input,
+                        perception=perception,
+                        strategy=self.agent.strategize(perception=perception),
+                        response=response,
+                    )
+                self._emit_progress("evaluate", "done")
+                response = AgentMessage(
+                    role=response.role,
+                    content=self._apply_output_guard(response.content),
+                    confidence=response.confidence,
+                    metadata=response.metadata,
+                )
+                trace.spans[0].set_attribute(
+                    "token_usage", self.llm.token_tracker.to_dict(),
+                ) if trace.spans else None
+                self._emit_progress("learn", "running", "学习与记忆巩固…")
+                self._defer_post_response(
+                    user_input.text or "", perception,
+                    self.agent.strategize(perception=perception), evaluation,
+                )
+                self.memory.working.add_conversation_turn(
+                    "assistant", response.content[:500],
+                )
+                return response
 
         # ── Phase 1.5: PLAN (if complex) ──
         plan = None
-        complexity_val = int(getattr(perception, 'complexity', 0))
-        task_type_val = str(getattr(perception, 'task_type', ''))
         if self.planner.should_plan(complexity_val, task_type_val):
+            self._emit_progress("plan", "running", "分解复杂任务…")
             with trace.span("plan") as sp:
                 plan = self.planner.decompose(user_input.text or "")
                 sp.set_attribute("steps", plan.total_steps if plan else 0)
+                self.logger.log(
+                    AgentRole.ORCHESTRATOR,
+                    f"Plan created: {plan.total_steps} steps — {plan.goal}",
+                )
+            self._emit_progress("plan", "done")
+
+        # ── Phase 1.6: RAG RETRIEVAL ──
+        rag_context = ""
+        if self.document_store.get_chunk_count() > 0 and user_input.text:
+            self._emit_progress("rag", "running", "检索知识库…")
+            with trace.span("rag_retrieval") as sp:
+                rag_context = self._rag_retrieval(user_input.text)
+                sp.set_attribute("rag_chars", len(rag_context))
+            self._emit_progress("rag", "done")
 
         # ── Phase 2: STRATEGIZE ──
+        self._emit_progress("strategize", "running", "制定策略…")
         with trace.span("strategize") as sp:
             strategy = self.agent.strategize(perception=perception)
+        self._emit_progress("strategize", "done")
 
         # ── Phase 3: EXECUTE ──
-        with trace.span("execute") as sp:
-            response = self.agent.execute(
-                user_input=user_input,
-                perception=perception,
-                strategy=strategy,
-                modality_context=modality_context,
-            )
-            sp.set_attribute("response_length", len(response.content))
+        # Choose execution path based on task complexity and type.
+        self._emit_progress("execute", "running", "生成回复…")
+
+        use_react = (
+            task_type_val == "tool_use"
+            or (complexity_val >= 4 and plan is not None and plan.is_complex)
+        )
+        use_team = (
+            complexity_val >= 5
+            and len(self.team.members) >= 2
+            and task_type_val in ("analysis", "content_generation", "code_generation")
+        )
+
+        if use_team:
+            # ── Team collaboration path ──
+            with trace.span("team_collaborate") as sp:
+                self.logger.log(
+                    AgentRole.ORCHESTRATOR,
+                    f"Using team collaboration ({len(self.team.members)} members)",
+                )
+                team_result = self.team.collaborate(user_input.text or "")
+                response = AgentMessage(
+                    role="assistant",
+                    content=team_result.final_output,
+                    confidence=0.85 if team_result.success else 0.5,
+                    metadata={
+                        "execution_path": "team",
+                        "contributors": list(team_result.contributions.keys()),
+                        "elapsed_ms": team_result.elapsed_ms,
+                    },
+                )
+                sp.set_attribute("response_length", len(response.content))
+        elif use_react:
+            # ── ReAct tool-augmented reasoning path ──
+            with trace.span("react_execute") as sp:
+                plan_context = ""
+                if plan:
+                    plan_context = f"\nPlan:\n{plan.summary()}"
+                react_question = (user_input.text or "") + plan_context
+                self.logger.log(
+                    AgentRole.ORCHESTRATOR,
+                    "Using ReAct executor for tool-augmented reasoning",
+                )
+                react_trace = self.react_executor.run(
+                    react_question,
+                    context=rag_context,
+                    step_callback=self._get_stream_step_callback(),
+                )
+                # Mark plan steps as completed if plan exists
+                if plan:
+                    for step in plan.steps:
+                        step.status = "completed"
+                response = AgentMessage(
+                    role="assistant",
+                    content=react_trace.final_answer,
+                    confidence=0.85 if react_trace.success else 0.6,
+                    metadata={
+                        "execution_path": "react",
+                        "react_iterations": react_trace.total_iterations,
+                        "react_success": react_trace.success,
+                    },
+                )
+                sp.set_attribute("response_length", len(response.content))
+                sp.set_attribute("react_iterations", react_trace.total_iterations)
+        else:
+            # ── Standard execution path (with RAG + plan context injected) ──
+            with trace.span("execute") as sp:
+                # Inject RAG and plan context via modality_context
+                if rag_context:
+                    modality_context["knowledge_base"] = rag_context
+                if plan:
+                    modality_context["task_plan"] = plan.summary()
+                response = self.agent.execute(
+                    user_input=user_input,
+                    perception=perception,
+                    strategy=strategy,
+                    modality_context=modality_context,
+                )
+                sp.set_attribute("response_length", len(response.content))
+
+        self._emit_progress("execute", "done")
 
         # ── Phase 4: EVALUATE ──
+        self._emit_progress("evaluate", "running", "评估回复质量…")
         with trace.span("evaluate") as sp:
             evaluation = self.agent.evaluate(
                 user_input=user_input,
@@ -887,6 +1176,7 @@ class Pinocchio:
                 response=response,
             )
             sp.set_attribute("quality", getattr(evaluation, 'output_quality', 0))
+        self._emit_progress("evaluate", "done")
 
         # ── Phase 4.5: COMPLETENESS RETRY LOOP ──
         # If the evaluator says the response is incomplete, ask the
@@ -931,10 +1221,25 @@ class Pinocchio:
                 f"complete: {evaluation.is_complete}",
             )
 
+        # ── Phase 4.6: OUTPUT GUARD ──
+        # Mask PII, block policy violations, flag hallucinations.
+        response = AgentMessage(
+            role=response.role,
+            content=self._apply_output_guard(response.content),
+            confidence=response.confidence,
+            metadata=response.metadata,
+        )
+
+        # ── Record token usage on the trace ──
+        trace.spans[0].set_attribute(
+            "token_usage", self.llm.token_tracker.to_dict(),
+        ) if trace.spans else None
+
         # ── Phase 5+6: LEARN & META-REFLECT (deferred to background) ──
         # These phases update memory but don't affect the current response.
         # Running them in a background thread lets us return the response
         # immediately after evaluation, saving 2-3 LLM call latencies.
+        self._emit_progress("learn", "running", "学习与记忆巩固…")
         user_text = user_input.text or "(non-text input)"
         self._defer_post_response(user_text, perception, strategy, evaluation)
 
@@ -974,9 +1279,12 @@ class Pinocchio:
                     strategy=strategy,
                     evaluation=evaluation,
                 )
+                self._emit_progress("learn", "done")
+                self._last_learning_error = None  # clear on success
 
                 # Phase 6: META-REFLECT (periodic)
                 if self.agent.should_meta_reflect():
+                    self._emit_progress("reflect", "running", "元反思…")
                     self.logger.log(
                         AgentRole.ORCHESTRATOR,
                         "Meta-reflection triggered — running higher-order analysis",
@@ -987,6 +1295,7 @@ class Pinocchio:
                             AgentRole.ORCHESTRATOR,
                             f"Top improvement priorities: {meta.priority_improvements[:3]}",
                         )
+                    self._emit_progress("reflect", "done")
 
                 # Periodic consolidation
                 if self._interaction_count % 10 == 0 and self._interaction_count > 0:
@@ -997,28 +1306,284 @@ class Pinocchio:
                             f"Memory consolidation: {promoted}",
                         )
             except Exception as exc:
+                self._last_learning_error = str(exc)
                 self.logger.error(
                     AgentRole.ORCHESTRATOR,
                     f"Background post-response error: {exc}",
                 )
+                self._emit_progress("learn", "done")
 
         thread = threading.Thread(
-            target=_background, name="pinocchio-post-response", daemon=True
+            target=_background, name="pinocchio-post-response", daemon=False
         )
         self._post_response_thread = thread
         thread.start()
+
+    def _wait_for_background(self, timeout: float = 10.0) -> None:
+        """Block until the post-response thread finishes (or timeout).
+
+        Called by atexit so non-daemon threads complete memory writes
+        before process exit.
+        """
+        t = self._post_response_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
+    # ------------------------------------------------------------------
+    # Internal: Progress callback & RAG retrieval
+    # ------------------------------------------------------------------
+
+    def set_progress_callback(
+        self, callback: Callable[[str, str, str], None] | None,
+    ) -> None:
+        """Register a callback for cognitive loop phase progress.
+
+        The callback receives ``(phase, status, detail)`` where:
+        - *phase*: one of ``perceive``, ``plan``, ``rag``, ``strategize``,
+          ``execute``, ``evaluate``, ``learn``, ``reflect``, ``preprocess``.
+        - *status*: ``"running"`` or ``"done"``.
+        - *detail*: optional human-readable description.
+        """
+        self._progress_callback = callback
+
+    def _emit_progress(
+        self, phase: str, status: str, detail: str = "",
+    ) -> None:
+        """Emit a progress event to the registered callback (if any).
+
+        Also pushes events to the thread-local stream queue when called
+        from a ``chat_stream()`` background thread.
+        """
+        # Thread-local stream queue (chat_stream per-call isolation)
+        stream_queue = getattr(
+            getattr(self, "_stream_event_queue_local", None), "queue", None,
+        )
+        if stream_queue is not None:
+            stream_queue.put(f"[PHASE] {phase}: {status} {detail}\n")
+
+        cb = getattr(self, "_progress_callback", None)
+        if cb is not None:
+            try:
+                cb(phase, status, detail)
+            except Exception:
+                _orch_logger.debug(
+                    "Progress callback error (phase=%s)", phase, exc_info=True,
+                )
+
+    def _rag_retrieval(self, query: str, top_k: int = 5) -> str:
+        """Retrieve relevant document chunks from the RAG store.
+
+        Returns a formatted string of search results, or an empty string
+        if no relevant chunks are found.
+        """
+        try:
+            chunks = self.document_store.search(query, top_k=top_k)
+            if not chunks:
+                return ""
+            parts: list[str] = []
+            for i, chunk in enumerate(chunks):
+                source_info = f" (source: {chunk.source})" if chunk.source else ""
+                parts.append(
+                    f"[Knowledge {i + 1}{source_info}]\n{chunk.text}"
+                )
+            rag_text = "\n\n".join(parts)
+            self.logger.log(
+                AgentRole.ORCHESTRATOR,
+                f"RAG retrieved {len(chunks)} chunks ({len(rag_text)} chars)",
+            )
+            return rag_text
+        except Exception as exc:
+            self.logger.error(
+                AgentRole.ORCHESTRATOR, f"RAG retrieval failed: {exc}",
+            )
+            return ""
+
+    def _get_stream_step_callback(self):
+        """Return a ReAct step callback if running inside a chat_stream thread."""
+        from pinocchio.planning.react import ReActStep
+
+        stream_queue = getattr(
+            getattr(self, "_stream_event_queue_local", None), "queue", None,
+        )
+        if stream_queue is None:
+            return None
+
+        def _on_step(step: ReActStep) -> None:
+            if step.action != "FINISH":
+                msg = (
+                    f"[STEP]\n"
+                    f"💭 {step.thought}\n"
+                    f"🔧 {step.action}({step.action_input})\n"
+                    f"📋 {step.observation[:500]}\n"
+                    f"[/STEP]\n"
+                )
+                stream_queue.put(msg)
+
+        return _on_step
+
+    # ------------------------------------------------------------------
+    # Internal: MCP auto-connect
+    # ------------------------------------------------------------------
+
+    def _auto_connect_mcp(self) -> None:
+        """Auto-connect to MCP servers listed in PINOCCHIO_MCP_SERVERS env var.
+
+        Format: comma-separated URLs, e.g.
+        ``PINOCCHIO_MCP_SERVERS=http://localhost:8080/mcp,http://host2:9090/mcp``
+        """
+        import os
+        servers = os.getenv("PINOCCHIO_MCP_SERVERS", "")
+        if not servers:
+            return
+        for url in servers.split(","):
+            url = url.strip()
+            if url:
+                try:
+                    registered = self.mcp_bridge.connect(url)
+                    if registered:
+                        self.logger.log(
+                            AgentRole.ORCHESTRATOR,
+                            f"MCP connected: {url} ({len(registered)} tools)",
+                        )
+                except Exception as exc:
+                    self.logger.error(
+                        AgentRole.ORCHESTRATOR,
+                        f"MCP connect failed for {url}: {exc}",
+                    )
+
+    def connect_mcp(self, server_url: str) -> list[str]:
+        """Manually connect to an MCP server and register its tools.
+
+        Returns the list of registered tool names.
+        """
+        return self.mcp_bridge.connect(server_url)
+
+    def disconnect_mcp(self, server_url: str) -> None:
+        """Disconnect from an MCP server."""
+        self.mcp_bridge.disconnect(server_url)
+
+    # ------------------------------------------------------------------
+    # Internal: Graph templates
+    # ------------------------------------------------------------------
+
+    def _register_graph_templates(self) -> None:
+        """Register built-in workflow graph templates."""
+        # Template 1: Research pipeline — search → fetch → synthesize
+        research = AgentGraph("research_pipeline")
+        research.add_node(GraphNode(
+            node_id="search",
+            handler=lambda ctx: self.tool_executor.execute(
+                "web_search", {"query": ctx.get("query", "")},
+            ),
+            description="Search the web for information",
+        ))
+        research.add_node(GraphNode(
+            node_id="synthesize",
+            handler=lambda ctx: self.llm.ask(
+                "Synthesise the following search results into a clear answer.",
+                f"Query: {ctx.get('query', '')}\n\nResults:\n{ctx.get('search', '')}",
+            ),
+            description="Synthesize search results into a coherent answer",
+        ))
+        research.add_edge(GraphEdge(source="search", target="synthesize"))
+        self._graph_templates["research"] = research
+
+        # Template 2: Code review pipeline — analyze → sandbox test → report
+        code_review = AgentGraph("code_review_pipeline")
+        code_review.add_node(GraphNode(
+            node_id="analyze",
+            handler=lambda ctx: self.llm.ask(
+                "You are a code reviewer. Analyze the code for bugs, style, "
+                "and potential improvements. Output your analysis.",
+                ctx.get("code", ""),
+            ),
+            description="Analyze code quality",
+        ))
+        code_review.add_node(GraphNode(
+            node_id="test",
+            handler=lambda ctx: self.tool_executor.execute(
+                "python_exec", {"code": ctx.get("code", "print('ok')")},
+            ),
+            description="Run the code in sandbox",
+        ))
+        code_review.add_node(GraphNode(
+            node_id="report",
+            handler=lambda ctx: self.llm.ask(
+                "Produce a concise code review report combining the analysis "
+                "and test results.",
+                f"Analysis:\n{ctx.get('analyze', '')}\n\n"
+                f"Test output:\n{ctx.get('test', '')}",
+            ),
+            description="Produce final review report",
+        ))
+        code_review.add_edge(GraphEdge(source="analyze", target="report"))
+        code_review.add_edge(GraphEdge(source="test", target="report"))
+        self._graph_templates["code_review"] = code_review
+
+    def run_graph(
+        self,
+        template_name: str,
+        inputs: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a named graph template with the given inputs.
+
+        Returns a dict mapping node_id → NodeResult.
+        """
+        graph = self._graph_templates.get(template_name)
+        if graph is None:
+            return {"error": f"Unknown template: {template_name}. "
+                    f"Available: {list(self._graph_templates.keys())}"}
+        results = self.graph_executor.run(graph, initial_input=inputs)
+        return {nid: r.to_dict() for nid, r in results.items()}
+
+    def list_graph_templates(self) -> list[dict[str, Any]]:
+        """Return info about available graph templates."""
+        return [g.to_dict() for g in self._graph_templates.values()]
+
+    # ------------------------------------------------------------------
+    # Internal: Output guard
+    # ------------------------------------------------------------------
+
+    def _apply_output_guard(self, text: str) -> str:
+        """Run the output guard and return masked text if PII found."""
+        check = self._output_guard.check(text)
+        if check.pii_found:
+            self.logger.warn(
+                AgentRole.ORCHESTRATOR,
+                f"Output guard: masked PII — {', '.join(check.pii_found)}",
+            )
+        if not check.is_safe:
+            self.logger.error(
+                AgentRole.ORCHESTRATOR,
+                f"Output guard: blocked — {check.summary}",
+            )
+            return (
+                "抱歉，生成的回复包含不当内容，已被安全系统拦截。"
+                "请换一种方式提问。"
+            )
+        return check.masked_text
 
     # ------------------------------------------------------------------
     # Internal: Parallel Modality Preprocessing
     # ------------------------------------------------------------------
 
     def _preprocess_modalities(self, user_input: MultimodalInput) -> dict[str, str]:
-        """Pre-process non-text modalities in parallel.
+        """Pre-process non-text modalities into text descriptions.
 
         When the user sends images + audio + video simultaneously, each
-        modality processor runs in its own thread.  The resulting text
-        descriptions are returned as a dict keyed by modality name so
-        downstream agents can incorporate them.
+        modality processor runs **in its own thread** (if parallel mode
+        is enabled and ``max_workers > 1``).  The resulting text
+        descriptions are returned as a dict keyed by modality name
+        (``vision``, ``audio``, ``video``) so downstream agents can
+        incorporate them into the execution context.
+
+        Falls back to sequential processing on single-core machines or
+        when ``parallel_modalities=False``.
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of modality name to textual description.
         """
         tasks: dict[str, tuple[Any, dict[str, Any]]] = {}
 

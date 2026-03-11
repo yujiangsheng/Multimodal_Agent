@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,8 +136,21 @@ class ReActExecutor:
         self._tool_registry = tool_registry
         self._max_iterations = max_iterations
 
-    def run(self, question: str, context: str = "") -> ReActTrace:
-        """Run the ReAct loop until FINISH or max iterations."""
+    def run(
+        self,
+        question: str,
+        context: str = "",
+        *,
+        step_callback: Callable[[ReActStep], None] | None = None,
+    ) -> ReActTrace:
+        """Run the ReAct loop until FINISH or max iterations.
+
+        Parameters
+        ----------
+        step_callback : optional callable invoked after each iteration
+            with the completed :class:`ReActStep`.  Use this to stream
+            intermediate observations to the frontend.
+        """
         trace = ReActTrace(question=question)
 
         tools_desc = self._tool_registry.to_prompt_description()
@@ -166,6 +180,8 @@ class ReActExecutor:
                 step.observation = "(done)"
                 trace.steps.append(step)
                 trace.final_answer = step.action_input.get("answer", raw)
+                if step_callback:
+                    step_callback(step)
                 break
 
             # Execute tool
@@ -174,6 +190,9 @@ class ReActExecutor:
             )
             step.observation = observation
             trace.steps.append(step)
+
+            if step_callback:
+                step_callback(step)
 
             # Feed observation back
             messages.append({"role": "assistant", "content": raw})
@@ -210,6 +229,13 @@ class ReActExecutor:
 
     def _extract_best_answer(self, messages: list[dict[str, Any]]) -> str:
         """Extract a final answer when max iterations are reached."""
+        import logging
+        _react_logger = logging.getLogger(__name__)
+        _react_logger.warning(
+            "ReAct reached max iterations (%d) without FINISH — "
+            "forcing final answer extraction.",
+            self._max_iterations,
+        )
         messages.append({
             "role": "user",
             "content": (
@@ -218,4 +244,16 @@ class ReActExecutor:
                 "best final answer now."
             ),
         })
-        return self._llm.chat(messages)
+        answer = self._llm.chat(messages)
+        if not answer.strip():
+            _react_logger.warning(
+                "ReAct final answer extraction returned empty — "
+                "using last observation as fallback."
+            )
+            # Fallback: use last observation from the steps
+            for msg in reversed(messages):
+                content = msg.get("content", "")
+                if content.startswith("Observation:"):
+                    return content.removeprefix("Observation:").strip()
+            return "(无法生成最终答案 — ReAct 达到最大迭代次数)"
+        return answer

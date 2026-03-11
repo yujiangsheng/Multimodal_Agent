@@ -106,8 +106,10 @@ class TestDocumentStore:
         assert store.get_document_count() == 1
 
     def test_ingest_file_not_found(self, store):
+        # Path must be inside data_dir to pass traversal check
+        missing = Path(store._data_dir) / "nonexistent_doc.txt"
         with pytest.raises(FileNotFoundError):
-            store.ingest("/nonexistent/doc.txt")
+            store.ingest(str(missing))
 
     def test_ingest_duplicate(self, store):
         id1 = store.ingest_text("Same content", source="a")
@@ -190,3 +192,75 @@ class TestDocumentStore:
         f.write_text("print('hello')", encoding="utf-8")
         doc_id = store.ingest(str(f))
         assert doc_id
+
+
+# =====================================================================
+# Embedding failure logging
+# =====================================================================
+
+
+class TestEmbeddingLogging:
+    """Embedding failures should be logged, not silently swallowed."""
+
+    def test_ingest_logs_embedding_failure(self, tmp_path):
+        from unittest.mock import patch
+        store = DocumentStore(data_dir=str(tmp_path))
+        mock_client = MagicMock()
+        mock_client.embed = MagicMock(side_effect=RuntimeError("API down"))
+        store.set_embedding_client(mock_client)
+
+        doc_path = tmp_path / "test.txt"
+        doc_path.write_text("This is test content for embedding.")
+
+        with patch("pinocchio.rag.document_store._logger") as mock_logger:
+            doc_id = store.ingest(str(doc_path))
+            mock_logger.warning.assert_called_once()
+            assert doc_id
+
+    def test_search_logs_vector_failure(self, tmp_path):
+        from unittest.mock import patch
+        store = DocumentStore(data_dir=str(tmp_path))
+        mock_client = MagicMock()
+        mock_client.embed = MagicMock(side_effect=RuntimeError("API down"))
+        store.set_embedding_client(mock_client)
+
+        with patch("pinocchio.rag.document_store._logger") as mock_logger:
+            results = store.search("test query")
+            mock_logger.warning.assert_called_once()
+
+
+# ========================================================================
+# Round 6 — I3: DocumentStore.ingest path traversal guard
+# ========================================================================
+
+
+class TestIngestPathTraversal:
+    """ingest() must reject paths outside data_dir."""
+
+    def test_normal_ingest_allowed(self, tmp_path):
+        store = DocumentStore(data_dir=str(tmp_path))
+        doc_file = tmp_path / "notes.txt"
+        doc_file.write_text("Hello world. " * 50)
+        doc_id = store.ingest(str(doc_file))
+        assert doc_id
+
+    def test_traversal_relative(self, tmp_path):
+        store = DocumentStore(data_dir=str(tmp_path / "subdir"))
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret data")
+        with pytest.raises(ValueError, match="Path traversal denied"):
+            store.ingest(str(outside))
+
+    def test_traversal_absolute(self, tmp_path):
+        store = DocumentStore(data_dir=str(tmp_path / "docs"))
+        with pytest.raises(ValueError, match="Path traversal denied"):
+            store.ingest("/etc/passwd")
+
+    def test_traversal_dotdot(self, tmp_path):
+        data = tmp_path / "data"
+        data.mkdir()
+        store = DocumentStore(data_dir=str(data))
+        outside = tmp_path / "outside.txt"
+        outside.write_text("nope")
+        with pytest.raises(ValueError, match="Path traversal denied"):
+            store.ingest(str(data / ".." / "outside.txt"))

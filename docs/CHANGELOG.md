@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.0] — 2025-07
+
+### Added: 可靠性与安全加固 (Reliability & Security Hardening)
+- **CircuitBreaker** — LLM 客户端新增熔断器，连续失败时自动熔断避免雪崩（`LLMClient`）
+- **InputGuard Unicode 规范化** — 防御 Unicode 混淆攻击（零宽字符、同形异义字等）
+- **Tracer TTL** — 追踪记录自动过期清理，防止内存泄漏
+- **RAG 路径遍历防护** — `DocumentStore.ingest()` 拒绝 `../` 路径穿越攻击
+- **OutputGuard** — 新增输出安全守卫：PII 脱敏、内容策略拦截、幻觉标记
+
+### Added: 线程安全与并发改进
+- **Session 切换加锁** — `switch_session()` 全程持有 `_lock`，避免并发状态损坏
+- **Team 并行执行线程安全** — `AgentTeam` 并行模式使用细粒度锁保护共享状态
+- **Team 并行模式 Review** — 并行执行后同样运行综合审查轮
+
+### Changed: 行为修正
+- **Token 计量修正** — `LLMClient.chat()` 仅在最终成功尝试记录 token 用量，重试不重复计数
+- **Graph 前驱检查** — `GraphExecutor._execute_node()` 检查前驱节点是否失败，失败则跳过
+- **JSON 空响应警告** — `_parse_json_response()` 返回空字典时记录 warning 日志
+
+### Changed: 测试
+- 测试用例从 876 → **1042**（36 个测试文件）
+- 新增 `test_parametrized.py`（参数化测试覆盖音频格式、枚举遍历等）
+- 新增 `test_robustness.py`（LLM 异常场景、极端输入压力测试）
+- 拆分 Round 6 测试到对应模块测试文件中
+
+### Fixed
+- 修复 `CodeSandbox` 在 macOS 下的进程隔离兼容性问题
+- 修复 `ResponseCache` TTL 边界条件下的竞态问题
+
+---
+
 ## [0.3.0] — 2025-07
 
 ### Added: 扩展子系统 (7 Subsystems)

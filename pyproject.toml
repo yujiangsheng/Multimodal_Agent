@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pinocchio-agent"
-version = "0.3.0"
+version = "0.4.0"
 description = "Pinocchio — 多模态自我进化智能体 / Multimodal Self-Evolving Agent with 6-phase cognitive loop, dual-axis memory, and tool-calling"
 readme = "README.md"
 license = "MIT"

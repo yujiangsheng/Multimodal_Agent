@@ -243,3 +243,49 @@ class TestTracer:
         # Should be a copy
         traces.clear()
         assert tracer.trace_count == 1
+
+
+# =====================================================================
+# TTL auto-eviction
+# =====================================================================
+
+
+class TestTracerTTL:
+    """Tracer should evict traces older than TTL."""
+
+    def test_default_ttl(self):
+        t = Tracer()
+        assert t._ttl_seconds == 3600.0
+
+    def test_custom_ttl(self):
+        t = Tracer(ttl_seconds=120)
+        assert t._ttl_seconds == 120
+
+    def test_evicts_old_traces(self):
+        t = Tracer(ttl_seconds=0.1)
+        t.create_trace("old")
+        time.sleep(0.15)
+        t.create_trace("new")
+        assert t.trace_count == 1
+        assert t.traces[0].name == "new"
+
+    def test_keeps_recent_traces(self):
+        t = Tracer(ttl_seconds=60)
+        t.create_trace("t1")
+        t.create_trace("t2")
+        assert t.trace_count == 2
+
+    def test_eviction_respects_max_traces(self):
+        t = Tracer(max_traces=3, ttl_seconds=3600)
+        for i in range(5):
+            t.create_trace(f"t{i}")
+        assert t.trace_count == 3
+
+    def test_context_manager_trace_eviction(self):
+        t = Tracer(ttl_seconds=0.1)
+        with t.start_trace("old"):
+            pass
+        time.sleep(0.15)
+        with t.start_trace("new"):
+            pass
+        assert t.trace_count == 1

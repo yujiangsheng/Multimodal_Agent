@@ -49,15 +49,17 @@ class MCPToolSpec:
 class MCPClient:
     """Low-level JSON-RPC 2.0 client for MCP servers."""
 
-    def __init__(self, server_url: str, *, timeout: float = 30.0) -> None:
+    def __init__(self, server_url: str, *, timeout: float = 30.0, tool_timeout: float = 60.0) -> None:
         """Initialise the MCP client.
 
         Args:
             server_url: Base URL of the MCP server (e.g. ``http://localhost:8080/mcp``).
             timeout: HTTP request timeout in seconds.
+            tool_timeout: Maximum seconds to wait for a tool execution.
         """
         self._url = server_url.rstrip("/")
         self._http = httpx.Client(timeout=timeout)
+        self._tool_timeout = tool_timeout
         self._request_id = 0
 
     def _next_id(self) -> int:
@@ -97,19 +99,35 @@ class MCPClient:
         return tools
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        """Invoke a tool on the MCP server."""
-        result = self._rpc_call("tools/call", {
-            "name": name,
-            "arguments": arguments or {},
-        })
-        # MCP returns content array; extract text
-        if isinstance(result, dict):
-            content = result.get("content", [])
-            texts = [c.get("text", "") for c in content if c.get("type") == "text"]
-            if texts:
-                return "\n".join(texts)
-            return json.dumps(result, ensure_ascii=False)
-        return str(result) if result else ""
+        """Invoke a tool on the MCP server.
+
+        Enforces ``tool_timeout`` to prevent a slow server from
+        blocking the cognitive loop indefinitely.
+        """
+        import concurrent.futures
+
+        def _do_call() -> Any:
+            result = self._rpc_call("tools/call", {
+                "name": name,
+                "arguments": arguments or {},
+            })
+            # MCP returns content array; extract text
+            if isinstance(result, dict):
+                content = result.get("content", [])
+                texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                if texts:
+                    return "\n".join(texts)
+                return json.dumps(result, ensure_ascii=False)
+            return str(result) if result else ""
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_do_call)
+            try:
+                return future.result(timeout=self._tool_timeout)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError(
+                    f"MCP tool '{name}' timed out after {self._tool_timeout}s"
+                )
 
     def close(self) -> None:
         """Close the underlying HTTP connection."""
