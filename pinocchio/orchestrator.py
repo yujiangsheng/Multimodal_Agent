@@ -65,6 +65,16 @@ from pinocchio.utils.logger import PinocchioLogger
 from pinocchio.utils.resource_monitor import ResourceMonitor
 from pinocchio.utils.response_cache import ResponseCache
 
+# ── New subsystems (Gaps 1–7) ──
+from pinocchio.planning.planner import TaskPlanner
+from pinocchio.planning.react import ReActExecutor
+from pinocchio.sandbox.code_sandbox import CodeSandbox
+from pinocchio.rag.document_store import DocumentStore
+from pinocchio.mcp.mcp_client import MCPToolBridge
+from pinocchio.graph.agent_graph import AgentGraph, GraphExecutor
+from pinocchio.collaboration.team import AgentTeam, TeamMember
+from pinocchio.tracing.tracer import Tracer
+
 
 class Pinocchio:
     """Top-level orchestrator for the self-evolving multimodal agent.
@@ -201,6 +211,33 @@ class Pinocchio:
 
         # Remove leftover empty sessions from earlier restarts / tests
         self._conversation_store.purge_empty_sessions(keep_id=session.id)
+
+        # ── New subsystems (Gaps 1–7) ──
+        # Gap 1: Multi-step task planner (ReAct)
+        self.planner = TaskPlanner(self.llm)
+        self.react_executor = ReActExecutor(
+            self.llm, self.tool_executor, self.tool_registry,
+        )
+
+        # Gap 2: Code sandbox
+        self.sandbox = CodeSandbox()
+
+        # Gap 3: RAG document store
+        self.document_store = DocumentStore(data_dir=data_dir)
+        if self._embedding_client:
+            self.document_store.set_embedding_client(self._embedding_client)
+
+        # Gap 4: MCP protocol bridge
+        self.mcp_bridge = MCPToolBridge(self.tool_registry)
+
+        # Gap 5: Agent graph (workflow engine)
+        self.graph_executor = GraphExecutor(max_workers=self._max_workers)
+
+        # Gap 6: Multi-agent collaboration
+        self.team = AgentTeam("default_team", llm_client=self.llm)
+
+        # Gap 7: Structured tracing
+        self.tracer = Tracer()
 
         # Log detected hardware
         if verbose:
@@ -456,6 +493,15 @@ class Pinocchio:
             "working_memory": self.memory.working.summary(),
             "context_manager": self._context_manager.stats(),
             "response_cache": self._response_cache.stats(),
+            "rag": {
+                "documents": self.document_store.get_document_count(),
+                "chunks": self.document_store.get_chunk_count(),
+            },
+            "mcp": {
+                "connected_servers": self.mcp_bridge.connected_servers,
+            },
+            "tracing": self.tracer.stats(),
+            "team_members": list(self.team.members.keys()),
         }
 
     # ------------------------------------------------------------------
@@ -784,7 +830,6 @@ class Pinocchio:
         """
 
         # ── Phase 0: Buffer the raw user input into working memory ──
-        # Working memory gives downstream agents conversational context
         if user_input.text:
             self.memory.working.add_conversation_turn("user", user_input.text)
 
@@ -792,44 +837,56 @@ class Pinocchio:
         if self._is_simple_input(user_input):
             return self._run_fast_path(user_input)
 
-        # ── Phase 0.5: PREPROCESS MODALITIES (parallel or sequential) ──
-        # Non-text modalities (images/audio/video) are converted to text
-        # descriptions before entering the cognitive loop so every agent
-        # can reason about them uniformly.
-        modality_context = self._preprocess_modalities(user_input)
+        # ── Start a trace for this interaction ──
+        trace = self.tracer.create_trace(f"interaction_{self._interaction_count}")
 
-        # Inject user profile so the execute phase can adapt its tone
-        modality_context["user_profile"] = self._user_model_context()
+        # ── Phase 0.5: PREPROCESS MODALITIES ──
+        with trace.span("preprocess_modalities") as sp:
+            modality_context = self._preprocess_modalities(user_input)
+            modality_context["user_profile"] = self._user_model_context()
+            sp.set_attribute("modalities", list(modality_context.keys()))
 
         # ── Phase 1: PERCEIVE ──
-        # Classify the task, detect modalities, assess complexity & confidence
-        perception = self.agent.perceive(
-            user_input=user_input,
-            modality_context=modality_context,
-        )
+        with trace.span("perceive") as sp:
+            perception = self.agent.perceive(
+                user_input=user_input,
+                modality_context=modality_context,
+            )
+            sp.set_attribute("task_type", str(getattr(perception, 'task_type', '')))
+            sp.set_attribute("complexity", int(getattr(perception, 'complexity', 0)))
+
+        # ── Phase 1.5: PLAN (if complex) ──
+        plan = None
+        complexity_val = int(getattr(perception, 'complexity', 0))
+        task_type_val = str(getattr(perception, 'task_type', ''))
+        if self.planner.should_plan(complexity_val, task_type_val):
+            with trace.span("plan") as sp:
+                plan = self.planner.decompose(user_input.text or "")
+                sp.set_attribute("steps", plan.total_steps if plan else 0)
 
         # ── Phase 2: STRATEGIZE ──
-        # Select (or construct) the best approach; retrieve procedural memory
-        strategy = self.agent.strategize(perception=perception)
+        with trace.span("strategize") as sp:
+            strategy = self.agent.strategize(perception=perception)
 
         # ── Phase 3: EXECUTE ──
-        # Generate the user-facing response; includes auto-continuation if
-        # the LLM hits its token limit (up to _MAX_AUTO_CONTINUATIONS rounds)
-        response = self.agent.execute(
-            user_input=user_input,
-            perception=perception,
-            strategy=strategy,
-            modality_context=modality_context,
-        )
+        with trace.span("execute") as sp:
+            response = self.agent.execute(
+                user_input=user_input,
+                perception=perception,
+                strategy=strategy,
+                modality_context=modality_context,
+            )
+            sp.set_attribute("response_length", len(response.content))
 
         # ── Phase 4: EVALUATE ──
-        # Score quality, check completeness, identify improvement areas
-        evaluation = self.agent.evaluate(
-            user_input=user_input,
-            perception=perception,
-            strategy=strategy,
-            response=response,
-        )
+        with trace.span("evaluate") as sp:
+            evaluation = self.agent.evaluate(
+                user_input=user_input,
+                perception=perception,
+                strategy=strategy,
+                response=response,
+            )
+            sp.set_attribute("quality", getattr(evaluation, 'output_quality', 0))
 
         # ── Phase 4.5: COMPLETENESS RETRY LOOP ──
         # If the evaluator says the response is incomplete, ask the

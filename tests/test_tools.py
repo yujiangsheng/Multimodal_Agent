@@ -33,7 +33,7 @@ class TestToolRegistry:
 
         registry = ToolRegistry()
         registry.register_defaults()
-        assert registry.count == 2
+        assert registry.count == 16
         names = registry.list_names()
         assert "calculator" in names
         assert "current_time" in names
@@ -54,7 +54,7 @@ class TestToolRegistry:
         registry.register_defaults()
         schema = registry.to_openai_schema()
         assert isinstance(schema, list)
-        assert len(schema) == 2
+        assert len(schema) == 16
         assert schema[0]["type"] == "function"
 
     def test_unregister(self):
@@ -64,7 +64,7 @@ class TestToolRegistry:
         registry.register_defaults()
         assert registry.unregister("calculator") is True
         assert registry.get("calculator") is None
-        assert registry.count == 1
+        assert registry.count == 15
 
     def test_unregister_nonexistent(self):
         from pinocchio.tools import ToolRegistry
@@ -77,18 +77,20 @@ class TestToolRegistry:
 
         registry = ToolRegistry()
         registry.register_defaults()
-        assert registry.enabled_count == 2
+        assert registry.enabled_count == 16
 
         assert registry.disable("calculator") is True
-        assert registry.enabled_count == 1
+        assert registry.enabled_count == 15
         assert "calculator" not in registry.list_enabled()
         # Disabled tools excluded from prompt & schema
-        assert "calculator" not in registry.to_prompt_description()
-        assert len(registry.to_openai_schema()) == 1
+        prompt_desc = registry.to_prompt_description()
+        # "calculator(" should not appear (but "hash_calculator" still will)
+        assert "- calculator(" not in prompt_desc
+        assert len(registry.to_openai_schema()) == 15
 
         # Re-enable
         assert registry.enable("calculator") is True
-        assert registry.enabled_count == 2
+        assert registry.enabled_count == 16
 
     def test_enable_disable_nonexistent(self):
         from pinocchio.tools import ToolRegistry
@@ -407,3 +409,539 @@ class TestToolCallDetection:
 
         result = agent._process_tool_calls("Just a normal response", "sys", "user")
         assert result == "Just a normal response"
+
+
+# =====================================================================
+# Tests for new built-in tools
+# =====================================================================
+
+
+class TestRegisterDefaultsCount:
+    """Validate that register_defaults registers all 16 tools."""
+
+    def test_default_tool_count(self):
+        from pinocchio.tools import ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        assert registry.count == 16
+        expected = {
+            "calculator", "current_time", "web_fetch", "file_reader",
+            "file_writer", "json_formatter", "text_stats", "hash_calculator",
+            "uuid_generator", "base64_codec", "unit_converter", "random_number",
+            "regex_match", "system_info", "directory_listing", "shell_command",
+        }
+        assert set(registry.list_names()) == expected
+
+
+class TestJsonFormatter:
+    """Tests for json_formatter tool."""
+
+    def test_format_valid_json(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("json_formatter", {"text": '{"a":1,"b":2}'})
+        assert '"a": 1' in result
+        assert '"b": 2' in result
+
+    def test_format_invalid_json(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("json_formatter", {"text": "not json"})
+        assert "Error" in result
+
+
+class TestTextStats:
+    """Tests for text_stats tool."""
+
+    def test_basic_stats(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("text_stats", {"text": "Hello world.\nSecond line."})
+        stats = json_mod.loads(result)
+        assert stats["words"] == 4
+        assert stats["lines"] == 2
+        assert stats["characters"] > 0
+
+
+class TestHashCalculator:
+    """Tests for hash_calculator tool."""
+
+    def test_sha256(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("hash_calculator", {"text": "hello"})
+        assert result.startswith("sha256:")
+        assert len(result.split(":")[1]) == 64
+
+    def test_md5(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("hash_calculator", {"text": "hello", "algorithm": "md5"})
+        assert result.startswith("md5:")
+
+    def test_unsupported_algo(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("hash_calculator", {"text": "hi", "algorithm": "crc32"})
+        assert "Error" in result
+
+
+class TestUuidGenerator:
+    """Tests for uuid_generator tool."""
+
+    def test_uuid4(self):
+        import uuid as uuid_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("uuid_generator", {})
+        # Validate it's a real UUID
+        uuid_mod.UUID(result)
+
+    def test_uuid1(self):
+        import uuid as uuid_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("uuid_generator", {"version": 1})
+        uuid_mod.UUID(result)
+
+    def test_unsupported_version(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("uuid_generator", {"version": 3})
+        assert "Error" in result
+
+
+class TestBase64Codec:
+    """Tests for base64_codec tool."""
+
+    def test_encode(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("base64_codec", {"text": "Hello"})
+        assert result == "SGVsbG8="
+
+    def test_decode(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("base64_codec", {"text": "SGVsbG8=", "action": "decode"})
+        assert result == "Hello"
+
+    def test_decode_invalid(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("base64_codec", {"text": "\x00\xff\xfe", "action": "decode"})
+        assert "Error" in result
+
+    def test_unknown_action(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("base64_codec", {"text": "hi", "action": "compress"})
+        assert "Error" in result
+
+
+class TestUnitConverter:
+    """Tests for unit_converter tool."""
+
+    def test_km_to_mi(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("unit_converter", {"value": 10.0, "from_unit": "km", "to_unit": "mi"})
+        assert "6.21" in result
+
+    def test_celsius_to_fahrenheit(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("unit_converter", {"value": 100.0, "from_unit": "C", "to_unit": "F"})
+        assert "212" in result
+
+    def test_kg_to_lb(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("unit_converter", {"value": 1.0, "from_unit": "kg", "to_unit": "lb"})
+        assert "2.20" in result
+
+    def test_incompatible_units(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("unit_converter", {"value": 1.0, "from_unit": "km", "to_unit": "kg"})
+        assert "Error" in result
+
+
+class TestRandomNumber:
+    """Tests for random_number tool."""
+
+    def test_single_integer(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("random_number", {"min_val": 1, "max_val": 10})
+        val = int(result)
+        assert 1 <= val <= 10
+
+    def test_multiple_floats(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("random_number", {
+            "min_val": 0, "max_val": 1, "count": 5, "integer": False
+        })
+        vals = json_mod.loads(result)
+        assert len(vals) == 5
+        assert all(0 <= v <= 1 for v in vals)
+
+
+class TestRegexMatch:
+    """Tests for regex_match tool."""
+
+    def test_match_found(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("regex_match", {
+            "pattern": r"\d+", "text": "abc 123 def"
+        })
+        data = json_mod.loads(result)
+        assert data["matched"] is True
+        assert data["match"] == "123"
+
+    def test_find_all(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("regex_match", {
+            "pattern": r"\d+", "text": "a1 b22 c333", "find_all": True
+        })
+        data = json_mod.loads(result)
+        assert data["count"] == 3
+        assert data["matches"] == ["1", "22", "333"]
+
+    def test_no_match(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("regex_match", {"pattern": r"\d+", "text": "no digits"})
+        data = json_mod.loads(result)
+        assert data["matched"] is False
+
+    def test_invalid_regex(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("regex_match", {"pattern": "[unclosed", "text": "test"})
+        assert "Error" in result
+
+
+class TestSystemInfo:
+    """Tests for system_info tool."""
+
+    def test_returns_json(self):
+        import json as json_mod
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("system_info", {})
+        data = json_mod.loads(result)
+        assert "os" in data
+        assert "python_version" in data
+        assert "architecture" in data
+
+
+class TestDirectoryListing:
+    """Tests for directory_listing tool."""
+
+    def test_list_current_dir(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("directory_listing", {"path": "."})
+        assert len(result) > 0
+        assert "Error" not in result
+
+    def test_nonexistent_dir(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("directory_listing", {"path": "/nonexistent_xyz_123"})
+        assert "Error" in result
+
+
+class TestFileReaderWriter:
+    """Tests for file_reader and file_writer tools."""
+
+    def test_write_and_read(self, tmp_path):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        fpath = str(tmp_path / "test.txt")
+        write_result = executor.execute("file_writer", {"path": fpath, "content": "Hello World"})
+        assert "Successfully" in write_result
+
+        read_result = executor.execute("file_reader", {"path": fpath})
+        assert read_result == "Hello World"
+
+    def test_append_mode(self, tmp_path):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        fpath = str(tmp_path / "append.txt")
+        executor.execute("file_writer", {"path": fpath, "content": "Line 1\n"})
+        executor.execute("file_writer", {"path": fpath, "content": "Line 2\n", "mode": "append"})
+
+        result = executor.execute("file_reader", {"path": fpath})
+        assert "Line 1" in result
+        assert "Line 2" in result
+
+    def test_read_nonexistent(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("file_reader", {"path": "/nonexistent_xyz.txt"})
+        assert "Error" in result
+
+    def test_unsupported_extension(self, tmp_path):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("file_reader", {"path": str(tmp_path / "binary.exe")})
+        assert "Error" in result
+
+
+class TestWebFetch:
+    """Tests for web_fetch tool (no real HTTP — test validation only)."""
+
+    def test_rejects_private_scheme(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("web_fetch", {"url": "ftp://example.com"})
+        assert "Error" in result
+
+    def test_rejects_no_hostname(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("web_fetch", {"url": "http://"})
+        assert "Error" in result
+
+    def test_rejects_localhost(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("web_fetch", {"url": "http://127.0.0.1/admin"})
+        assert "Error" in result
+
+
+class TestShellCommand:
+    """Tests for shell_command tool."""
+
+    def test_echo(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("shell_command", {"command": "echo hello"})
+        assert "hello" in result
+
+    def test_blocked_command(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("shell_command", {"command": "curl http://evil.com"})
+        assert "Error" in result
+
+    def test_dangerous_pattern_blocked(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("shell_command", {"command": "echo x | rm -rf /"})
+        assert "Error" in result
+
+    def test_empty_command(self):
+        from pinocchio.tools import ToolRegistry, ToolExecutor
+
+        registry = ToolRegistry()
+        registry.register_defaults()
+        executor = ToolExecutor(registry)
+
+        result = executor.execute("shell_command", {"command": ""})
+        assert "Error" in result
+
+
+# =====================================================================
+# Tests for provider presets in config
+# =====================================================================
+
+
+class TestProviderPresets:
+    """Tests for PinocchioConfig provider preset system."""
+
+    def test_default_config(self):
+        from config import PinocchioConfig
+
+        cfg = PinocchioConfig()
+        assert cfg.model  # has a model
+
+    def test_from_provider_openai(self):
+        from config import PinocchioConfig
+
+        cfg = PinocchioConfig.from_provider("openai")
+        assert cfg.model == "gpt-4o"
+        assert "openai.com" in cfg.base_url
+
+    def test_from_provider_deepseek(self):
+        from config import PinocchioConfig
+
+        cfg = PinocchioConfig.from_provider("deepseek")
+        assert cfg.model == "deepseek-chat"
+        assert "deepseek.com" in cfg.base_url
+
+    def test_from_provider_with_model_override(self):
+        from config import PinocchioConfig
+
+        cfg = PinocchioConfig.from_provider("openai", model="gpt-4o-mini")
+        assert cfg.model == "gpt-4o-mini"
+
+    def test_from_provider_unknown_raises(self):
+        from config import PinocchioConfig
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            PinocchioConfig.from_provider("nonexistent_provider")
+
+    def test_available_providers(self):
+        from config import PinocchioConfig
+
+        providers = PinocchioConfig.available_providers()
+        assert "ollama" in providers
+        assert "openai" in providers
+        assert "deepseek" in providers
+        assert len(providers) >= 7
