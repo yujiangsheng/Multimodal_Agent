@@ -46,6 +46,7 @@ class DocumentChunk:
     score: float = 0.0     # relevance score (filled by search)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the chunk to a JSON-friendly dictionary."""
         d = {
             "chunk_id": self.chunk_id,
             "doc_id": self.doc_id,
@@ -138,6 +139,11 @@ class DocumentStore:
     """Persistent document store with chunking and vector search."""
 
     def __init__(self, data_dir: str = "data") -> None:
+        """Initialise the store, creating the SQLite DB on first use.
+
+        Args:
+            data_dir: Directory for the SQLite database file.
+        """
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._data_dir / "rag_documents.db"

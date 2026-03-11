@@ -38,6 +38,7 @@ class ReActStep:
     observation: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise this step to a JSON-friendly dictionary."""
         return {
             "iteration": self.iteration,
             "thought": self.thought,
@@ -58,6 +59,7 @@ class ReActTrace:
     total_iterations: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the full trace to a JSON-friendly dictionary."""
         return {
             "question": self.question,
             "steps": [s.to_dict() for s in self.steps],
@@ -67,6 +69,7 @@ class ReActTrace:
         }
 
     def summary(self) -> str:
+        """Human-readable summary of the ReAct execution trace."""
         lines = [f"ReAct: {self.question}"]
         for s in self.steps:
             lines.append(f"  [{s.iteration}] Think: {s.thought[:80]}...")
@@ -119,6 +122,14 @@ class ReActExecutor:
         *,
         max_iterations: int = _MAX_ITERATIONS,
     ) -> None:
+        """Initialise the ReAct executor.
+
+        Args:
+            llm: LLM client for generating thoughts and actions.
+            tool_executor: Executor that dispatches tool calls.
+            tool_registry: Registry providing tool descriptions for the prompt.
+            max_iterations: Safety limit on reasoning iterations.
+        """
         self._llm = llm
         self._tool_executor = tool_executor
         self._tool_registry = tool_registry

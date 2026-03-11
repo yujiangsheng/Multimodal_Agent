@@ -1,0 +1,73 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [0.3.0] — 2025-07
+
+### Added: 扩展子系统 (7 Subsystems)
+- **任务规划** (`pinocchio/planning/`) — Plan-and-Solve 多步分解 + ReAct 推理循环
+- **代码沙箱** (`pinocchio/sandbox/`) — 隔离子进程安全执行 Python 代码
+- **RAG 知识库** (`pinocchio/rag/`) — SQLite 持久化文档分块 + 向量/关键字混合检索
+- **MCP 协议** (`pinocchio/mcp/`) — JSON-RPC 2.0 连接外部 MCP 工具服务器
+- **Agent Graph** (`pinocchio/graph/`) — DAG 工作流引擎，拓扑排序 + 条件路由 + 并行执行
+- **多智能体协作** (`pinocchio/collaboration/`) — 团队协调模式（分解/分配/执行/综合）
+- **结构化追踪** (`pinocchio/tracing/`) — OpenTelemetry 风格 Trace/Span 系统
+
+### Added: 工具生态
+- 工具数量从 3 → 16（新增 web_fetch, shell_command, file_reader, file_writer, json_query, text_summarizer, regex_search, hash_digest, base64_codec, uuid_generator, env_info, http_request, timestamp_convert）
+- web_fetch 内置 SSRF 防护（私有 IP 段拦截）
+- shell_command 使用命令白名单 + timeout 保护
+
+### Added: LLM 多供应商
+- `PinocchioConfig.from_provider()` 工厂方法
+- 8 种预设：Ollama / OpenAI / DeepSeek / Dashscope / Groq / Together / Anthropic / SiliconFlow
+
+### Added: 文档与示例
+- `examples/` 目录：8 个独立使用示例
+- `docs/CHANGELOG.md`（本文件）
+- README 新增故障排查、FAQ、Changelog 章节
+- ARCHITECTURE.md 新增 7 个子系统设计文档
+
+### Changed
+- 编排器集成所有 7 个子系统（planner, react, sandbox, rag, mcp, graph, team, tracer）
+- 测试覆盖从 608 → 876 个用例（33 个测试文件）
+- `pyproject.toml` 添加 `project.urls`（Homepage, Repository, Issues, Docs, Changelog）
+
+### Fixed
+- `Tool(func=...)` → `Tool(function=...)` 参数名修正
+- `ReActExecutor` 构造函数参数顺序修正
+
+---
+
+## [0.2.0] — 2025-03
+
+### Added
+- 统一智能体重构：6 个子智能体合并为单一 `PinocchioAgent`
+- 流式输出：`chat_stream()` 逐 token 返回 + SSE Web 推送
+- 工具调用框架：`ToolRegistry` + `ToolExecutor` + 内置 3 工具
+- 向量语义搜索：`EmbeddingClient` + nomic-embed-text
+- 响应完整性保障：自动续写 + 启发式检查 + finish_reason 检测
+- Prompt 注入防御：`InputGuard` 多层检测
+- 上下文管理：`ContextManager` 智能摘要 + token 预算
+- 响应缓存：`ResponseCache` 线程安全 LRU + TTL
+- 硬件感知并行：`ResourceMonitor` + `ParallelExecutor`
+- Web Demo：FastAPI + SSE + 多模态上传
+
+### Changed
+- 608 个测试全部通过，>95% 覆盖率
+
+---
+
+## [0.1.0] — 2025-02
+
+### Added
+- 初始版本
+- 6 阶段认知循环：PERCEIVE → STRATEGIZE → EXECUTE → EVALUATE → LEARN → META-REFLECT
+- 双轴记忆系统：内容轴 × 时间轴
+- 多模态支持：文本 / 图像 / 音频 / 视频
+- CLI 交互入口
+- 293 个测试全部通过

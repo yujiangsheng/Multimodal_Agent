@@ -33,6 +33,7 @@ class TaskStep:
     result: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise this step to a JSON-friendly dictionary."""
         return {
             "order": self.order,
             "description": self.description,
@@ -44,6 +45,7 @@ class TaskStep:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskStep:
+        """Reconstruct a :class:`TaskStep` from a previously serialised dict."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -58,24 +60,29 @@ class TaskPlan:
 
     @property
     def total_steps(self) -> int:
+        """Total number of steps in the plan."""
         return len(self.steps)
 
     @property
     def completed_steps(self) -> int:
+        """Number of steps that have finished successfully."""
         return sum(1 for s in self.steps if s.status == "completed")
 
     @property
     def is_done(self) -> bool:
+        """``True`` when every step is completed or failed."""
         return all(s.status in ("completed", "failed") for s in self.steps)
 
     @property
     def current_step(self) -> TaskStep | None:
+        """Return the first step still in *pending* status, or ``None``."""
         for s in self.steps:
             if s.status == "pending":
                 return s
         return None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the full plan to a JSON-friendly dictionary."""
         return {
             "goal": self.goal,
             "steps": [s.to_dict() for s in self.steps],
@@ -84,6 +91,7 @@ class TaskPlan:
         }
 
     def summary(self) -> str:
+        """Human-readable progress summary with status markers."""
         lines = [f"Plan: {self.goal} ({self.completed_steps}/{self.total_steps} done)"]
         for s in self.steps:
             marker = {"pending": "○", "running": "●", "completed": "✓", "failed": "✗"}
@@ -124,6 +132,7 @@ class TaskPlanner:
     """Decomposes complex user requests into structured multi-step plans."""
 
     def __init__(self, llm: LLMClient) -> None:
+        """Initialise the planner with an LLM client for plan generation."""
         self._llm = llm
 
     def should_plan(self, complexity: int, task_type: str = "") -> bool:

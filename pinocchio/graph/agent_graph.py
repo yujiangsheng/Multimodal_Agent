@@ -44,6 +44,7 @@ class NodeResult:
     elapsed_ms: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the node result to a JSON-friendly dictionary."""
         return {
             "node_id": self.node_id,
             "success": self.success,
@@ -76,9 +77,11 @@ class GraphNode:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __hash__(self) -> int:
+        """Hash by node_id so nodes can be used in sets."""
         return hash(self.node_id)
 
     def __eq__(self, other: object) -> bool:
+        """Two nodes are equal when they share the same node_id."""
         if isinstance(other, GraphNode):
             return self.node_id == other.node_id
         return NotImplemented
@@ -112,16 +115,19 @@ class AgentGraph:
     """
 
     def __init__(self, name: str = "default") -> None:
+        """Create a new graph with the given *name*."""
         self.name = name
         self._nodes: dict[str, GraphNode] = {}
         self._edges: list[GraphEdge] = []
 
     def add_node(self, node: GraphNode) -> None:
+        """Register a node in the graph. *node_id* must be non-empty."""
         if not node.node_id:
             raise ValueError("Node must have a non-empty node_id")
         self._nodes[node.node_id] = node
 
     def add_edge(self, edge: GraphEdge) -> None:
+        """Add a directed edge. Both source and target must exist."""
         if edge.source not in self._nodes:
             raise ValueError(f"Source node '{edge.source}' not in graph")
         if edge.target not in self._nodes:
@@ -130,10 +136,12 @@ class AgentGraph:
 
     @property
     def nodes(self) -> dict[str, GraphNode]:
+        """Snapshot of all registered nodes (id → node)."""
         return dict(self._nodes)
 
     @property
     def edges(self) -> list[GraphEdge]:
+        """Snapshot of all registered edges."""
         return list(self._edges)
 
     def roots(self) -> list[str]:
@@ -187,6 +195,7 @@ class AgentGraph:
         return issues
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the graph structure (nodes and edges) to a dict."""
         return {
             "name": self.name,
             "nodes": [
@@ -209,6 +218,7 @@ class GraphExecutor:
     """
 
     def __init__(self, max_workers: int = 4) -> None:
+        """Create an executor with up to *max_workers* parallel threads."""
         self._max_workers = max_workers
 
     def run(

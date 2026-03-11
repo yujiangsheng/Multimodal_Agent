@@ -104,7 +104,7 @@ tests/
 └── ...                      # 其余按模块命名
 ```
 
-> 当前共 **26 个测试文件、608 个测试用例**，全部 100% 通过。
+> 当前共 **33 个测试文件、876 个测试用例**，全部 100% 通过。
 
 ---
 
@@ -118,13 +118,29 @@ pinocchio/
 ├── memory/                 # 双轴记忆系统
 ├── models/                 # 枚举 + 数据类
 ├── multimodal/             # 模态处理器
-├── tools.py                # 工具注册 + 安全执行
+├── tools.py                # 工具注册 + 安全执行（16 个内置工具）
+├── planning/               # 任务规划 & ReAct 推理
+│   ├── planner.py          # Plan-and-Solve 多步分解
+│   └── react.py            # Thought → Action → Observation 循环
+├── sandbox/                # 代码沙箱
+│   └── code_sandbox.py     # 隔离子进程安全执行
+├── rag/                    # 知识库 (RAG)
+│   └── document_store.py   # SQLite 文档分块 + 混合检索
+├── mcp/                    # MCP 协议客户端
+│   └── mcp_client.py       # JSON-RPC 2.0 连接
+├── graph/                  # Agent Graph 工作流
+│   └── agent_graph.py      # DAG 拓扑排序 + 并行执行
+├── collaboration/          # 多智能体协作
+│   └── team.py             # 团队协调模式
+├── tracing/                # 追踪与可观测性
+│   └── tracer.py           # Span/Trace/Tracer
 └── utils/
     ├── llm_client.py       # LLMClient + EmbeddingClient
     ├── logger.py            # 彩色日志 (自动 TTY 检测)
     ├── input_guard.py       # 输入安全 (注入检测)
     ├── context_manager.py   # 上下文窗口管理
     ├── response_cache.py    # 响应缓存 (LRU + TTL)
+    ├── conversation_store.py# 会话持久化
     ├── parallel_executor.py # 并行执行器
     └── resource_monitor.py  # 资源监控
 ```
@@ -211,6 +227,19 @@ agent.chat("你的问题")
 - 🟩 EXECUTION（绿色）
 - 🟦 EVALUATION（蓝色）
 - 🟨 LEARNING（粗体黄色）
+
+---
+
+## 常见陷阱
+
+| 陷阱 | 说明 |
+|------|------|
+| `Tool(func=...)` | 正确参数名是 `function=`，不是 `func` |
+| `ReActExecutor(llm, registry, executor)` | 正确顺序是 `(llm, tool_executor, tool_registry)` |
+| `planner.should_plan(perception)` | 需要两个参数：`(complexity: int, task_type: str)` |
+| 忘记 `from __future__ import annotations` | 新模块必须加，否则 `str | None` 在 Python 3.9 报错 |
+| 测试中调用真实 LLM | 所有 LLM 调用必须 mock（使用 `conftest.py` 中的 fixtures） |
+| `asyncio_mode` 未配置 | 已在 `pyproject.toml` 中设置为 `auto`，无需再加 `@pytest.mark.asyncio` |
 
 ---
 

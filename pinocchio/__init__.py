@@ -13,8 +13,25 @@ For multimodal input, pass file paths via keyword arguments::
     agent.chat("Describe this image", image_paths=["photo.jpg"])
     agent.chat("Summarise this recording", audio_paths=["meeting.wav"])
 
-All internal sub-modules (agents, memory, models, multimodal, utils)
-are implementation details and should not normally be imported directly.
+Sub-packages
+~~~~~~~~~~~~
+
+=================  ==========================================================
+Package            Description
+=================  ==========================================================
+``agents``         Unified cognitive agent with 6 skills
+``memory``         Dual-axis memory: episodic / semantic / procedural
+``models``         Enums, dataclasses, schemas
+``multimodal``     Text / image / audio / video processors
+``utils``          LLM client, logger, guards, caching, context management
+``planning``       Task decomposition (Plan-and-Solve) & ReAct execution
+``sandbox``        Safe Python code execution in isolated subprocess
+``rag``            Retrieval-Augmented Generation document store
+``mcp``            Model Context Protocol client & tool bridge
+``graph``          DAG-based multi-step workflow engine
+``collaboration``  Multi-agent teams with coordinator pattern
+``tracing``        OpenTelemetry-inspired structured tracing
+=================  ==========================================================
 """
 
 from pinocchio.orchestrator import Pinocchio

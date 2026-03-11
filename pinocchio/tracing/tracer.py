@@ -58,6 +58,7 @@ class SpanEvent:
     attributes: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the event to a JSON-friendly dictionary."""
         return {
             "name": self.name,
             "timestamp": self.timestamp,
@@ -84,6 +85,7 @@ class Span:
     events: list[SpanEvent] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        """Auto-generate span_id and start_time if not provided."""
         if not self.span_id:
             self.span_id = uuid.uuid4().hex[:12]
         if not self.start_time:
@@ -91,36 +93,44 @@ class Span:
 
     @property
     def elapsed_ms(self) -> float:
+        """Wall-clock duration of this span in milliseconds."""
         end = self.end_time or time.time()
         return (end - self.start_time) * 1000
 
     def set_attribute(self, key: str, value: Any) -> None:
+        """Attach a key-value attribute to this span."""
         self.attributes[key] = value
 
     def add_event(self, name: str, attributes: dict[str, Any] | None = None) -> None:
+        """Record a timestamped event within this span."""
         self.events.append(SpanEvent(
             name=name, timestamp=time.time(),
             attributes=attributes or {},
         ))
 
     def set_status(self, status: SpanStatus, error: str = "") -> None:
+        """Set the span status; optionally attach an error message."""
         self.status = status
         if error:
             self.attributes["error.message"] = error
 
     def end(self) -> None:
+        """Mark the span as finished (records the end timestamp)."""
         if not self.end_time:
             self.end_time = time.time()
 
     def __enter__(self) -> Span:
+        """Context-manager entry — returns the span itself."""
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Context-manager exit — records errors and ends the span."""
         if exc_type:
             self.set_status(SpanStatus.ERROR, str(exc_val))
         self.end()
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the span to a JSON-friendly dictionary."""
         return {
             "span_id": self.span_id,
             "trace_id": self.trace_id,
@@ -142,6 +152,12 @@ class Trace:
     """
 
     def __init__(self, name: str = "", trace_id: str = "") -> None:
+        """Create a new trace.
+
+        Args:
+            name: Human-readable label for this trace.
+            trace_id: Optional explicit ID; auto-generated if omitted.
+        """
         self.trace_id = trace_id or uuid.uuid4().hex[:16]
         self.name = name
         self._spans: list[Span] = []
@@ -178,29 +194,36 @@ class Trace:
 
     @property
     def spans(self) -> list[Span]:
+        """Snapshot of all spans in this trace."""
         return list(self._spans)
 
     @property
     def elapsed_ms(self) -> float:
+        """Wall-clock duration of the entire trace in milliseconds."""
         end = self._end_time or time.time()
         return (end - self._start_time) * 1000
 
     @property
     def status(self) -> SpanStatus:
+        """Overall status — ERROR if any span errored."""
         return self._status
 
     def end(self) -> None:
+        """Mark the trace as finished."""
         self._end_time = time.time()
 
     def __enter__(self) -> Trace:
+        """Context-manager entry."""
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Context-manager exit — records error status and ends trace."""
         if exc_type:
             self._status = SpanStatus.ERROR
         self.end()
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the trace (with all spans) to a JSON-friendly dict."""
         return {
             "trace_id": self.trace_id,
             "name": self.name,
@@ -228,6 +251,7 @@ class Tracer:
     """
 
     def __init__(self, max_traces: int = 1000) -> None:
+        """Create a tracer that retains up to *max_traces* traces."""
         self._traces: list[Trace] = []
         self._max_traces = max_traces
 
@@ -245,7 +269,7 @@ class Tracer:
             trace.end()
 
     def create_trace(self, name: str = "interaction") -> Trace:
-        """Create and register a new trace (non-context-manager)."""
+        """Create and register a new trace (non-context-manager variant)."""
         trace = Trace(name=name)
         self._traces.append(trace)
         if len(self._traces) > self._max_traces:
@@ -254,16 +278,20 @@ class Tracer:
 
     @property
     def traces(self) -> list[Trace]:
+        """Snapshot of all recorded traces."""
         return list(self._traces)
 
     @property
     def trace_count(self) -> int:
+        """Number of traces recorded so far."""
         return len(self._traces)
 
     def latest(self) -> Trace | None:
+        """Return the most recently created trace, or ``None``."""
         return self._traces[-1] if self._traces else None
 
     def clear(self) -> None:
+        """Discard all recorded traces."""
         self._traces.clear()
 
     def export_json(self, pretty: bool = False) -> str:

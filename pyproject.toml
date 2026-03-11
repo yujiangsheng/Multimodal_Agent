@@ -59,6 +59,13 @@ dev = [
 [project.scripts]
 pinocchio = "main:main"
 
+[project.urls]
+Homepage = "https://github.com/yujiangsheng/Multimodal_Agent"
+Documentation = "https://github.com/yujiangsheng/Multimodal_Agent/blob/main/docs/ARCHITECTURE.md"
+Repository = "https://github.com/yujiangsheng/Multimodal_Agent.git"
+Issues = "https://github.com/yujiangsheng/Multimodal_Agent/issues"
+Changelog = "https://github.com/yujiangsheng/Multimodal_Agent/blob/main/docs/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 include = ["pinocchio*", "web*"]
 

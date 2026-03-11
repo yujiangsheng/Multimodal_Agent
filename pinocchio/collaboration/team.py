@@ -86,6 +86,7 @@ class TeamMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the message to a JSON-friendly dictionary."""
         return {
             "sender": self.sender,
             "recipient": self.recipient,
@@ -130,6 +131,7 @@ class TeamResult:
     success: bool = True
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the team result to a JSON-friendly dictionary."""
         return {
             "task": self.task[:100],
             "final_output": self.final_output[:500],
@@ -149,28 +151,40 @@ class AgentTeam:
     """
 
     def __init__(self, name: str = "default_team", *, llm_client: Any = None) -> None:
+        """Create a new team.
+
+        Args:
+            name: Human-readable team name.
+            llm_client: Shared :class:`LLMClient` for members without
+                a custom handler.
+        """
         self.name = name
         self._llm = llm_client
         self._members: dict[str, TeamMember] = {}
         self._messages: list[TeamMessage] = []
 
     def add_member(self, member: TeamMember) -> None:
+        """Add a member to the team. *member_id* must be non-empty."""
         if not member.member_id:
             raise ValueError("TeamMember must have a non-empty member_id")
         self._members[member.member_id] = member
 
     def remove_member(self, member_id: str) -> bool:
+        """Remove a member by ID. Returns ``True`` if found and removed."""
         return self._members.pop(member_id, None) is not None
 
     @property
     def members(self) -> dict[str, TeamMember]:
+        """Snapshot of current team members (id → member)."""
         return dict(self._members)
 
     @property
     def message_log(self) -> list[TeamMessage]:
+        """Copy of all messages exchanged so far."""
         return list(self._messages)
 
     def set_llm_client(self, llm_client: Any) -> None:
+        """Replace the shared LLM client for subsequent calls."""
         self._llm = llm_client
 
     def collaborate(self, task: str) -> TeamResult:

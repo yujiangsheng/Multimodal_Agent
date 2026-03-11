@@ -37,6 +37,7 @@ class ExecutionResult:
     timed_out: bool = False
 
     def to_dict(self) -> dict:
+        """Serialise the execution result to a JSON-friendly dictionary."""
         return {
             "stdout": self.stdout,
             "stderr": self.stderr,
@@ -98,6 +99,12 @@ class CodeSandbox:
     """Execute Python code safely in an isolated subprocess."""
 
     def __init__(self, timeout: int = 15, max_output: int = 50000) -> None:
+        """Initialise the sandbox.
+
+        Args:
+            timeout: Max seconds per execution (capped at 60).
+            max_output: Max bytes of stdout/stderr to capture.
+        """
         self._timeout = min(timeout, 60)  # hard cap at 60s
         self._max_output = max_output
 

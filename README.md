@@ -3,7 +3,7 @@
 [![Author](https://img.shields.io/badge/Author-Jiangsheng%20Yu-blue)](https://github.com/yujiangsheng)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org)
-[![Tests](https://img.shields.io/badge/Tests-608%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-876%20passed-brightgreen)]()
 
 > *"每一次对话都让我变得更好。"*
 
@@ -31,6 +31,14 @@ Pinocchio 是一个具备**持续自我学习与自我改进能力**的多模态
 | **硬件感知并行** | 自动检测 CPU / GPU / RAM，动态调整并行度 |
 | **异步支持** | `AsyncLLMClient` + `async_chat()` 适用于高吞吐场景 |
 | **快速路径** | 短文本消息自动跳过重型阶段，单次 LLM 调用即返回 |
+| **任务规划** | Plan-and-Solve 分解 + ReAct 推理循环，支持多步工具链 |
+| **代码沙箱** | 隔离子进程安全执行，import 白名单 + 超时 + 静态检查 |
+| **RAG 知识库** | SQLite 持久化文档分块 + 向量/关键字混合检索 |
+| **MCP 协议** | JSON-RPC 2.0 连接外部 MCP 工具服务器，透明桥接 |
+| **Agent Graph** | DAG 工作流引擎，拓扑排序 + 条件路由 + 并行扇出/汇聚 |
+| **多智能体协作** | 团队协调模式：分解 → 分配 → 执行 → 综合 |
+| **结构化追踪** | OpenTelemetry 风格 Trace/Span，JSON 导出 + 统计面板 |
+| **LLM 多供应商** | 8 种预设（Ollama/OpenAI/DeepSeek/Dashscope/Groq/Together/Anthropic/SiliconFlow） |
 
 ---
 
@@ -76,14 +84,37 @@ Multimodal_Agent/
 │       ├── context_manager.py     # 上下文窗口管理 & 自动摘要
 │       ├── response_cache.py      # LLM 响应缓存（LRU + TTL）
 │       ├── resource_monitor.py    # CPU / GPU / RAM 检测
-│       └── parallel_executor.py   # 资源感知并行执行器
+│       ├── parallel_executor.py   # 资源感知并行执行器
+│       └── conversation_store.py  # 会话持久化存储
+│
+│   ├── planning/              # 任务规划 & ReAct 推理
+│   │   ├── planner.py             # Plan-and-Solve 多步分解
+│   │   └── react.py               # Thought → Action → Observation 循环
+│   │
+│   ├── sandbox/               # 代码沙箱
+│   │   └── code_sandbox.py        # 隔离子进程安全执行 Python 代码
+│   │
+│   ├── rag/                   # 知识库 (RAG)
+│   │   └── document_store.py      # SQLite 文档分块 + 向量/关键字混合检索
+│   │
+│   ├── mcp/                   # MCP 协议客户端
+│   │   └── mcp_client.py          # JSON-RPC 2.0 连接外部工具服务器
+│   │
+│   ├── graph/                 # Agent Graph 工作流
+│   │   └── agent_graph.py         # DAG 拓扑排序 + 条件路由 + 并行执行
+│   │
+│   ├── collaboration/         # 多智能体协作
+│   │   └── team.py                # 团队协调模式（分解/分配/执行/综合）
+│   │
+│   └── tracing/               # 追踪与可观测性
+│       └── tracer.py              # Span/Trace/Tracer — OpenTelemetry 风格
 │
 ├── web/                       # Web Demo
 │   ├── app.py                     # FastAPI 后端（REST + SSE 流式 + 文件上传）
 │   └── static/
 │       └── index.html             # 单页前端（Chat UI + 多模态上传 + 状态仪表盘）
 │
-├── tests/                     # 测试套件（608 测试）
+├── tests/                     # 测试套件（876 测试）
 │   ├── conftest.py                # 共享 fixtures
 │   ├── test_agents.py             # 统一智能体 6 种技能测试
 │   ├── test_async.py              # 异步客户端测试
@@ -109,7 +140,14 @@ Multimodal_Agent/
 │   ├── test_tools.py              # 工具调用框架
 │   ├── test_utils.py              # LLMClient + Logger
 │   ├── test_video_coverage.py     # 视频处理覆盖
-│   └── test_working_memory.py     # 工作记忆单元测试
+│   ├── test_working_memory.py     # 工作记忆单元测试
+│   ├── test_planning.py           # 任务规划 & ReAct 推理
+│   ├── test_sandbox.py            # 代码沙箱边界测试
+│   ├── test_rag.py                # RAG 文档存储测试
+│   ├── test_mcp.py                # MCP 客户端 & Bridge 测试
+│   ├── test_graph.py              # Agent Graph 工作流测试
+│   ├── test_collaboration.py      # 多智能体协作测试
+│   └── test_tracing.py            # 追踪系统测试
 │
 └── docs/
     ├── ARCHITECTURE.md            # 架构设计深入文档
@@ -392,6 +430,10 @@ export PINOCCHIO_PARALLEL=true
 ├─────────────────────────────────────────────────────────────┤
 │ 基础层     LLMClient (sync+async+stream) │ Logger │ Monitor │
 │            ParallelExecutor │ ResourceMonitor                │
+├─────────────────────────────────────────────────────────────┤
+│ 扩展层     TaskPlanner │ ReActExecutor │ CodeSandbox         │
+│            DocumentStore (RAG) │ MCPToolBridge │ AgentGraph  │
+│            AgentTeam (协作) │ Tracer (追踪)                  │
 └─────────────────────────────────────────────────────────────┘
                              │
                      ┌───────▼───────┐
@@ -523,7 +565,7 @@ pytest -m "not slow"
 pytest tests/test_agents.py -v
 ```
 
-当前状态：**608 测试，全部通过**
+当前状态：**876 测试，全部通过**
 
 ---
 
@@ -621,6 +663,187 @@ print(registry.list_names())       # ['calculator', 'current_time', 'python_eval
 print(registry.to_prompt_description())   # LLM 可读的工具描述
 print(registry.to_openai_schema())        # OpenAI function-calling 格式
 ```
+
+---
+
+## 🆕 v0.3.0 新增子系统
+
+### 任务规划 (Planning)
+
+Plan-and-Solve 风格的多步分解，配合 ReAct 推理循环实现工具链式执行：
+
+```python
+from pinocchio.planning import TaskPlanner, ReActExecutor
+
+planner = TaskPlanner(llm)
+plan = planner.decompose("研究量子计算并写一份技术总结")
+for step in plan.steps:
+    print(f"{step.order}. {step.description} → tool: {step.tool_hint}")
+
+# ReAct 推理循环
+executor = ReActExecutor(llm, tool_executor, tool_registry)
+trace = executor.run("SHA-256('hello world') 是什么？")
+print(trace.final_answer)
+```
+
+### 代码沙箱 (Sandbox)
+
+在隔离子进程中安全执行 Python 代码：
+
+```python
+from pinocchio.sandbox import CodeSandbox
+
+sandbox = CodeSandbox(timeout=10)
+result = sandbox.execute("print(sum(range(100)))")
+print(result.stdout)   # "4950"
+print(result.success)  # True
+```
+
+### RAG 知识库
+
+SQLite 持久化的文档分块 + 向量/关键字混合检索：
+
+```python
+from pinocchio.rag import DocumentStore
+
+store = DocumentStore()
+store.ingest("docs/guide.md")
+results = store.search("如何配置记忆系统", top_k=5)
+for chunk in results:
+    print(chunk.text[:120])
+```
+
+### MCP 协议支持
+
+连接外部 MCP 工具服务器，自动注册工具到 Pinocchio：
+
+```python
+from pinocchio.mcp import MCPToolBridge
+
+bridge = MCPToolBridge(tool_registry)
+bridge.connect("http://localhost:8080/mcp")
+# 所有 MCP 工具已自动注册为 mcp_* 前缀
+```
+
+### Agent Graph 工作流
+
+DAG 拓扑排序 + 条件路由 + 并行扇出/汇聚：
+
+```python
+from pinocchio.graph import AgentGraph, GraphNode, GraphEdge, GraphExecutor
+
+graph = AgentGraph("pipeline")
+graph.add_node(GraphNode("search", handler=search_fn))
+graph.add_node(GraphNode("summarize", handler=summarize_fn))
+graph.add_edge(GraphEdge("search", "summarize"))
+
+results = GraphExecutor().run(graph, initial_input={"query": "quantum"})
+```
+
+### 多智能体协作
+
+团队协调模式：分解 → 分配 → 执行 → 综合：
+
+```python
+from pinocchio.collaboration import AgentTeam, TeamMember
+
+team = AgentTeam("review_team", llm_client=llm)
+team.add_member(TeamMember(member_id="analyst", role="analysis",
+                           specialty="数据分析"))
+team.add_member(TeamMember(member_id="writer", role="writing",
+                           specialty="技术写作"))
+result = team.collaborate("分析 Q3 销售数据并起草报告")
+print(result.final_output)
+```
+
+### 结构化追踪
+
+OpenTelemetry 风格的 Trace/Span 系统：
+
+```python
+from pinocchio.tracing import Tracer
+
+tracer = Tracer()
+with tracer.start_trace("chat_request") as trace:
+    with trace.span("perceive") as s:
+        s.set_attribute("modality", "text")
+    with trace.span("execute") as s:
+        s.add_event("tool_call", {"tool": "calculator"})
+
+print(tracer.export_summary())
+print(tracer.stats())  # {"traces": 1, "total_spans": 2, ...}
+```
+
+### LLM 多供应商预设
+
+一行代码切换 LLM 后端：
+
+```python
+from config import PinocchioConfig
+
+# 使用预设
+cfg = PinocchioConfig.from_provider("deepseek", model="deepseek-chat")
+cfg = PinocchioConfig.from_provider("openai", model="gpt-4o")
+cfg = PinocchioConfig.from_provider("dashscope", model="qwen-max")
+
+# 支持: ollama, openai, deepseek, dashscope, groq, together, anthropic_compat, siliconflow
+```
+
+---
+
+## ❓ 常见问题 (FAQ)
+
+**Q: Pinocchio 需要 GPU 吗？**
+A: 不需要。默认使用 Ollama 本地推理，CPU 即可运行（推荐使用 qwen3-vl:4b）。GPU 可加速但非必须。
+
+**Q: 支持哪些 LLM 后端？**
+A: 任何兼容 OpenAI Chat Completions API 的后端。内置 8 种预设（Ollama / OpenAI / DeepSeek / Dashscope / Groq / Together / Anthropic / SiliconFlow）。
+
+**Q: 记忆数据存在哪里？**
+A: 默认存储在项目根目录的 `data/` 文件夹中（JSON 文件）。可通过 `PINOCCHIO_DATA_DIR` 环境变量更改。
+
+**Q: 如何禁用认知循环，只做简单对话？**
+A: Pinocchio 的快速路径已自动处理。短文本消息（≤500 字）会跳过重型阶段，仅一次 LLM 调用即返回。
+
+**Q: 能否用于生产环境？**
+A: 当前版本（v0.3.0）适合研究和原型开发。生产部署建议增加身份认证（Web 已支持 API Key）、限流、日志收集等。
+
+---
+
+## 🔧 故障排查
+
+| 现象 | 原因 | 解决方案 |
+|------|------|----------|
+| `ConnectionRefusedError` | Ollama 服务未启动 | `ollama serve` |
+| `model 'qwen3-vl:4b' not found` | 模型未下载 | `ollama pull qwen3-vl:4b` |
+| 响应非常慢 | 模型太大或 `num_ctx` 太高 | 换用 4b 模型，降低 `PINOCCHIO_NUM_CTX` |
+| 中文乱码 | 终端编码问题 | 确保终端支持 UTF-8 (`export LANG=en_US.UTF-8`) |
+| `ModuleNotFoundError: web` | Web 依赖未安装 | `pip install -e ".[web]"` |
+| 测试失败 | 缺少 dev 依赖 | `pip install -e ".[dev]"` |
+| 记忆文件损坏 | JSON 写入中断 | 删除 `data/*.json` 重新开始 |
+
+---
+
+## 📋 Changelog
+
+### v0.3.0 (2025-07)
+- 新增 7 大子系统：任务规划、代码沙箱、RAG 知识库、MCP 协议、Agent Graph、多智能体协作、结构化追踪
+- 工具生态扩展至 16 个内置工具（web_fetch, shell_command, file_reader/writer, json_query 等）
+- LLM 多供应商预设系统（8 种后端一键切换）
+- 测试覆盖从 608 → 876 个用例
+- 全面文档优化与代码注释增强
+
+### v0.2.0 (2025-03)
+- 统一智能体重构：6 个子智能体合并为单一 PinocchioAgent
+- 流式输出、工具调用框架、向量语义搜索
+- 响应完整性保障、Prompt 注入防御
+- 上下文管理、响应缓存、硬件感知并行
+- 608 个测试全部通过
+
+### v0.1.0 (2025-02)
+- 初始版本：6 阶段认知循环、双轴记忆系统
+- 多模态支持（文本/图像/音频/视频）
+- CLI + Web Demo
 
 ---
 

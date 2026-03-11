@@ -37,6 +37,7 @@ class MCPToolSpec:
     server_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the tool specification to a JSON-friendly dictionary."""
         return {
             "name": self.name,
             "description": self.description,
@@ -49,11 +50,18 @@ class MCPClient:
     """Low-level JSON-RPC 2.0 client for MCP servers."""
 
     def __init__(self, server_url: str, *, timeout: float = 30.0) -> None:
+        """Initialise the MCP client.
+
+        Args:
+            server_url: Base URL of the MCP server (e.g. ``http://localhost:8080/mcp``).
+            timeout: HTTP request timeout in seconds.
+        """
         self._url = server_url.rstrip("/")
         self._http = httpx.Client(timeout=timeout)
         self._request_id = 0
 
     def _next_id(self) -> int:
+        """Generate a monotonically increasing JSON-RPC request ID."""
         self._request_id += 1
         return self._request_id
 
@@ -104,6 +112,7 @@ class MCPClient:
         return str(result) if result else ""
 
     def close(self) -> None:
+        """Close the underlying HTTP connection."""
         self._http.close()
 
 
@@ -115,6 +124,12 @@ class MCPToolBridge:
     """
 
     def __init__(self, tool_registry: Any) -> None:
+        """Initialise the bridge.
+
+        Args:
+            tool_registry: A Pinocchio :class:`ToolRegistry` instance
+                where discovered MCP tools will be registered.
+        """
         self._registry = tool_registry
         self._clients: dict[str, MCPClient] = {}
         self._tool_specs: list[MCPToolSpec] = []
@@ -183,8 +198,10 @@ class MCPToolBridge:
 
     @property
     def connected_servers(self) -> list[str]:
+        """List of server URLs currently connected."""
         return list(self._clients.keys())
 
     @property
     def tool_specs(self) -> list[MCPToolSpec]:
+        """All tool specifications discovered from connected servers."""
         return list(self._tool_specs)

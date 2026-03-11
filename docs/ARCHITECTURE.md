@@ -2,7 +2,7 @@
 
 本文档详细描述 Pinocchio 自我进化多模态智能体的内部架构、设计原则和关键实现细节。
 
-> 更新日期: 2026-03-10 · 版本 0.3.0 · 608 测试全部通过
+> 更新日期: 2025-07 · 版本 0.3.0 · 876 测试全部通过
 
 ---
 
@@ -20,7 +20,8 @@
 10. [向量语义搜索](#10-向量语义搜索)
 11. [性能优化](#11-性能优化)
 12. [数据流详解](#12-数据流详解)
-13. [扩展指南](#13-扩展指南)
+13. [扩展子系统](#13-扩展子系统)
+14. [扩展指南](#14-扩展指南)
 
 ---
 
@@ -511,7 +512,125 @@ WorkingMemoryItem — 会话条目 (item_id, category, content, relevance)
 
 ---
 
-## 13. 扩展指南
+## 13. 扩展子系统
+
+v0.3.0 引入了 7 个扩展子系统，全部集成在编排器中。
+
+### 13.1 任务规划 (Planning)
+
+**模块**: `pinocchio/planning/`
+
+| 类 | 职责 |
+|---|---|
+| `TaskPlanner` | Plan-and-Solve 风格多步分解，LLM 生成结构化 JSON 计划 |
+| `TaskPlan` / `TaskStep` | 计划与步骤的数据结构（含状态追踪、依赖关系） |
+| `ReActExecutor` | Thought → Action → Observation 迭代循环 |
+| `ReActTrace` / `ReActStep` | 推理过程的完整执行轨迹 |
+
+**设计要点**:
+- 编排器在 STRATEGIZE 阶段调用 `planner.should_plan(complexity, task_type)` 判断是否需要分解
+- 复杂度 ≥ 3 或特定任务类型（analysis, code_generation, multimodal_reasoning）自动触发
+- 支持失败后 `replan()` 重新规划
+
+### 13.2 代码沙箱 (Sandbox)
+
+**模块**: `pinocchio/sandbox/`
+
+| 类 | 职责 |
+|---|---|
+| `CodeSandbox` | 隔离子进程安全执行 Python 代码 |
+| `ExecutionResult` | 执行结果（stdout, stderr, exit_code, success, timed_out） |
+
+**安全机制**:
+- **静态检查**: 拒绝 `eval()`, `exec()`, `__import__`, `compile()`
+- **Import 白名单**: 阻止 `os`, `subprocess`, `socket`, `shutil` 等 30+ 模块
+- **文件系统保护**: 拦截写模式 `open()`，只允许读操作
+- **超时**: 默认 15 秒，硬性上限 60 秒
+- **隔离环境**: 子进程清空 `PATH`，限制在临时目录运行
+
+### 13.3 RAG 知识库
+
+**模块**: `pinocchio/rag/`
+
+| 类 | 职责 |
+|---|---|
+| `DocumentStore` | SQLite 持久化管理，文档分块，混合搜索 |
+| `DocumentChunk` | 分块数据结构（含元数据、嵌入向量、相关度分数） |
+
+**检索策略**:
+1. 首先尝试 **向量搜索**（cosine similarity），需要 embedding client
+2. 回退到 **关键字搜索**（SQLite LIKE，多词 OR 匹配）
+3. 按相关度降序排列，返回 top-k 结果
+
+**分块策略**: 段落优先切分，约 500 token/块，128 token 重叠窗口
+
+### 13.4 MCP 协议
+
+**模块**: `pinocchio/mcp/`
+
+| 类 | 职责 |
+|---|---|
+| `MCPClient` | JSON-RPC 2.0 底层客户端 |
+| `MCPToolBridge` | 发现 MCP 工具 → 注册到 Pinocchio ToolRegistry |
+| `MCPToolSpec` | 工具规范数据结构 |
+
+**协议实现**:
+- HTTP 传输（JSON-RPC 2.0 over POST）
+- `tools/list` — 发现工具
+- `tools/call` — 调用工具
+- 每个远程工具注册为 `mcp_<tool_name>` 前缀
+
+### 13.5 Agent Graph
+
+**模块**: `pinocchio/graph/`
+
+| 类 | 职责 |
+|---|---|
+| `AgentGraph` | DAG 定义（节点 + 有向边） |
+| `GraphNode` | 处理步骤节点（handler, retry, metadata） |
+| `GraphEdge` | 有向边（可选条件谓词） |
+| `GraphExecutor` | DAG 拓扑排序 → 按层级并行执行 |
+| `NodeResult` | 节点执行结果 |
+
+**执行策略**:
+- 拓扑排序保证依赖顺序
+- 同层节点用 ThreadPoolExecutor 并行执行
+- 条件边：仅当 `condition(NodeResult)` 返回 True 时才走该路径
+- 节点支持重试（`retry` 参数）
+
+### 13.6 多智能体协作
+
+**模块**: `pinocchio/collaboration/`
+
+| 类 | 职责 |
+|---|---|
+| `AgentTeam` | 团队管理 + 协调执行 |
+| `TeamMember` | 成员定义（role, specialty, handler） |
+| `TeamMessage` | 成员间消息 |
+| `TeamResult` | 协作结果（含所有贡献） |
+
+**协调模式**:
+1. `_decompose()` — LLM 将任务拆分为成员分配
+2. 按顺序执行（每个成员接收前序成员的上下文）
+3. `_synthesize()` — LLM 将所有贡献合成为最终输出
+
+### 13.7 结构化追踪
+
+**模块**: `pinocchio/tracing/`
+
+| 类 | 职责 |
+|---|---|
+| `Tracer` | 全局追踪器，管理 Trace 生命周期 |
+| `Trace` | 端到端交互记录（含多个 Span） |
+| `Span` | 单个操作的计时 + 属性 + 事件 |
+| `SpanStatus` | OK / ERROR / SKIPPED |
+| `SpanEvent` | Span 内的时间戳事件 |
+
+**集成方式**: 编排器在认知循环的每个阶段自动创建 Span，记录耗时、属性和工具调用事件。
+
+---
+
+## 14. 扩展指南
 
 ### 添加新认知技能
 
